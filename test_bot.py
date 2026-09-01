@@ -49,6 +49,21 @@ def test_decide():
     assert st["spin"] == -1, "remembers which way the ball went for the next search"
 
 
+def test_ball_memory():
+    close, far = TUNE["close_radius"] + 5, TUNE["close_radius"] - 15
+
+    st = {}
+    decide((0.0, close), 0.0, None, st)          # had it right on the nose...
+    assert decide(None, 0.0, None, st)[0] > 0, "...then it vanished under the plow: push on"
+    for _ in range(TUNE["ball_memory"] + 1):
+        out = decide(None, 0.0, None, st)
+    assert out[0] < 0, "but give up eventually instead of driving blind forever"
+
+    st = {}
+    decide((0.0, far), 0.0, None, st)            # only ever saw it far away
+    assert decide(None, 0.0, None, st)[0] < 0, "a ball lost at distance is really lost"
+
+
 def test_blind():
     st = {}
     vx, vy, w, kick = decide(None, 90.0, None, st, blind=True)
@@ -75,7 +90,7 @@ def test_gyro():
     assert abs(g.heading() - 0.0) < 1e-6, "so the same reading now means 'not turning'"
 
 
-for fn in (test_mix, test_angle_diff, test_decide, test_blind, test_gyro):
+for fn in (test_mix, test_angle_diff, test_decide, test_ball_memory, test_blind, test_gyro):
     fn()
     print("ok", fn.__name__)
 print("all good")

@@ -1,0 +1,24 @@
+# Rule 9.1.3: no computer at the field, so bot.py must already be running when you
+# place the robot. This starts it at power-on; it then just waits for the button.
+# Restart=always means a crash mid-match costs you seconds, not the match.
+#
+#   sudo cp ballbot.service /etc/systemd/system/
+#   sudo systemctl enable --now ballbot
+#   journalctl -u ballbot -f        # see what it's thinking
+#
+# Change User= and the paths if your username isn't "pi".
+
+[Unit]
+Description=ball-touch robot
+After=multi-user.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/ballbot
+ExecStart=/usr/bin/python3 /home/pi/ballbot/bot.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

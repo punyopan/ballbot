@@ -41,6 +41,7 @@ DEFAULTS = {
     "blind_std": 12,         # frame contrast below this = lens covered
     "blind_frames": 15,      # ~0.5 s of that before we believe it
     "imu_sign": 1,           # flip to -1 if the MPU-6050 is mounted upside down
+    "ball_memory": 25,       # frames to keep pushing after the plow hides the ball
 }
 _tf = os.path.join(HERE, "tune.json")
 TUNE = {**DEFAULTS, **(json.load(open(_tf)) if os.path.exists(_tf) else {})}
@@ -83,10 +84,16 @@ def decide(ball, herr, front_cm, st, blind=False):
         sweep = 1.0 if (st["n"] // 30) % 2 == 0 else -1.0
         return (T["speed"] * 0.8, sweep * 0.35, aim, True)
     if ball is None:
-        # spin toward wherever the ball went last, easing back so we don't camp the mouth
+        # At point-blank range the plow and the camera's own blind spot swallow the
+        # ball. Losing it while it was CLOSE means it's on our nose, not gone - back
+        # off now and you shove it away and chase it forever. Keep pushing briefly.
+        if (st.get("seen_r", 0) >= T["close_radius"]
+                and st["n"] - st.get("seen_n", -999) < T["ball_memory"]):
+            return (T["speed"], 0.0, aim, True)
         return (-0.12, 0.0, st.get("spin", 1) * T["search_spin"], False)
     dx, r = ball
     st["spin"] = 1 if dx < 0 else -1
+    st["seen_n"], st["seen_r"] = st["n"], r
     if front_cm is not None and front_cm < T["wall_cm"] and r < T["close_radius"]:
         return (-T["speed"], 0.0, st.get("spin", 1) * 0.3, False)  # 10.1: peel off the wall
     if r >= T["close_radius"]:

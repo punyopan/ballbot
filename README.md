@@ -11,6 +11,7 @@ motor driver board, 18650 battery box. Everything below is legal modification.
 | `calibrate.py` | slider tool to lock the ball colour on the real field → `tune.json` |
 | `test_bot.py` | self-check for the driving maths and the strategy, runs on a laptop |
 | `tune.json` | written by calibrate; every number you'd want to change at the venue |
+| `ballbot.service` | starts `bot.py` at power-on, because rule 9.1.3 bans laptops at the field |
 
 ```bash
 python3 test_bot.py     # maths sanity, no hardware needed
@@ -95,6 +96,27 @@ another robot parking in your face, so it's handled:
 - Physically: recess the lens in a short hood or tube, and tilt it forward ~30° so
   a falling cloth slides off instead of lying flat on it. Mount it low behind the
   plow, not on top of a mast where anything can land on it.
+
+## Competition day checklist
+
+Things that lose matches for reasons that have nothing to do with your code:
+
+- [ ] **Pi powered separately from the motors.** Four motors stalling against a wall
+      drag the 18650 pack down, the Pi browns out and reboots, and your robot is dead
+      for the rest of the match. Give the Pi its own power bank, or its own buck
+      converter off the pack. This is the single most common Raspberry Pi robot failure.
+- [ ] **`sudo systemctl enable --now ballbot`** — rule 9.1.3 means you cannot open a
+      laptop at the field. It has to boot into the program already running.
+- [ ] **Spare SD card, flashed and tested.** Corruption from a hard power-cut is the
+      second most common failure. Ten minutes to make, saves the whole tournament.
+- [ ] Spare charged 18650 pack. You play 4 matches (rule 8.1).
+- [ ] Kill switch fitted and easy to reach (4.5), battery in its box, no bare cells.
+- [ ] Team colour markers on **two** sides (2.3) — easy to forget, checked at inspection.
+- [ ] Weigh it fully assembled: 2.50 kg with battery, wings out, plow on (4.3).
+- [ ] Walk the 10-item inspection sheet (ภาคผนวก ก) yourself before you hand it over.
+- [ ] Use your 30 s field test (12.1) to run `calibrate.py` under the venue's lights,
+      not to drive around. Lighting is what breaks colour tracking, and it's the only
+      time you'll see the real field.
 
 ## Tuning at the venue
 
