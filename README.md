@@ -75,6 +75,43 @@ python3 test_bot.py     # maths sanity, no hardware needed
 python3 bot.py --dry    # prints motor commands instead of driving
 ```
 
+## Bring-up order, once it's on the Pi
+
+Do these in order. Each one assumes the last passed.
+
+```bash
+git clone https://github.com/punyopan/ballbot.git ~/ballbot && cd ~/ballbot
+```
+
+1. **Install** (above), enable I2C + Camera in `raspi-config`, reboot.
+2. `python3 test_bot.py` — pure logic, no hardware. Should say `all good`.
+3. `python3 bot.py --check` — architecture, apt-vs-pip, IMU, one camera frame.
+   Fix anything here before touching motors.
+4. **`python3 bot.py --wheels`** — robot up on a box, wheels hanging free.
+   Six moves, two seconds each. One wheel backwards → swap that motor's two wires
+   at the driver. Sideways or spin backwards as a whole → `invert_strafe` /
+   `invert_turn` in `tune.json`. Nothing later works until this is right.
+5. `python3 calibrate.py` — needs a screen (monitor on the Pi, or `ssh -X`).
+   Sliders until only the ball is white, press `s`.
+6. **On the floor with the ball.** Hold the ball where you want the robot to commit
+   and read the printed `r` from calibrate — that's your `close_radius`. Then run
+   `python3 bot.py` and let it play.
+7. Only now install the service:
+   `sudo cp ballbot.service /etc/systemd/system/ && sudo systemctl enable --now ballbot`
+
+**Once the service is enabled it owns the camera and the GPIO pins**, so a manual
+`python3 bot.py` will fail with a busy device. Stop it first:
+
+```bash
+sudo systemctl stop ballbot
+```
+
+Re-`start` it when you're done, and check it's healthy with `journalctl -u ballbot -f`.
+
+Rule 2.2 explicitly lets you load programs, set your side colour, charge, and test
+the camera *before* a match — so steps 5 and 6 are legal at the venue. Only during
+the 12 minutes is the laptop banned.
+
 ## The one strategic decision: **do not build a gripper**
 
 Rule 5.2/5.3 says the moment the ball can't escape on its own you are "คีบ":

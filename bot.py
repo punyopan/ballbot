@@ -327,9 +327,34 @@ def selftest():
     bot.stop()
 
 
+def wheeltest():
+    """python3 bot.py --wheels - robot UP ON A BOX, wheels hanging free.
+
+    Watch each move and fix what's wrong before you tune anything else. Every later
+    problem looks like bad driving if a wheel is backwards."""
+    bot = Robot()
+    moves = [("FORWARD", 1, 0, 0), ("BACKWARD", -1, 0, 0),
+             ("STRAFE LEFT  (sideways, nose stays put)", 0, 1, 0),
+             ("STRAFE RIGHT", 0, -1, 0),
+             ("SPIN LEFT  (counter-clockwise)", 0, 0, 1), ("SPIN RIGHT", 0, 0, -1)]
+    for label, vx, vy, w in moves:
+        print(label, flush=True)
+        s = TUNE["speed"]
+        bot.drive(vx * s, vy * s, w * s)
+        time.sleep(2)
+        bot.stop()
+        time.sleep(1)
+    print("\nONE wheel spinning the wrong way -> swap that motor's two wires at the")
+    print("driver board. Do NOT fix it in code, or strafing will go diagonal.")
+    print("All four right but sideways is backwards -> tune.json  invert_strafe: -1")
+    print("All four right but spin is backwards     -> tune.json  invert_turn: -1")
+
+
 def main():
     if "--check" in sys.argv:
         return selftest()
+    if "--wheels" in sys.argv:
+        return wheeltest()
     bot = Robot()
     grab = open_camera()
     left = 12 * 60
