@@ -1,0 +1,80 @@
+# หุ่นยนต์แตะบอล — build + code plan
+
+Base kit (fixed by rule 4.1): Raspberry Pi 4, 4× mecanum, 4 motors, top camera,
+motor driver board, 18650 battery box. Everything below is legal modification.
+
+## Files
+
+| file | what it is |
+|---|---|
+| `bot.py` | the whole robot: vision → strategy → mecanum drive |
+| `calibrate.py` | slider tool to lock the ball colour on the real field → `tune.json` |
+| `test_bot.py` | self-check for the driving maths and the strategy, runs on a laptop |
+| `tune.json` | written by calibrate; every number you'd want to change at the venue |
+
+```bash
+python3 test_bot.py     # maths sanity, no hardware needed
+```
+```bash
+python3 bot.py --dry    # prints motor commands instead of driving
+```
+
+## The one strategic decision: **do not build a gripper**
+
+Rule 5.2/5.3 says the moment the ball can't escape on its own you are "คีบ":
+wheels must stop, 5 second limit, no help from your ally, and if you move you
+get warned and hand the ball over. A gripper turns your fastest robot into a
+statue. Rule 5.1 says touching, pushing and kicking with an **open** front is
+totally free — keep driving.
+
+So: open front, ball always able to roll out. All the code assumes this.
+
+## What to add (in order of points per baht)
+
+1. **BNO055 IMU (~350฿)** — the single biggest upgrade. Mecanum wheels drift; without
+   a compass the robot has no idea which goal is which. At start you aim the robot
+   at the enemy goal and press the button — that heading is remembered for 12 minutes.
+   `bot.py` already reads it and orbits the ball until the nose points at the goal.
+   No IMU → the code still works, it just chases the ball blindly.
+2. **Curved front plow, ~70 mm deep, open top** — the whole 70 mm forward allowance
+   in rule 4.3. A shallow V centres the ball while you drive so you can push straight.
+   Aluminium or 3 mm PVC sheet. Not a cage (rule 4.4).
+3. **HC-SR04 or VL53L0X on the front** — stops you shoving a robot into the wall,
+   which is a foul under 10.1. `bot.py` backs off automatically.
+4. **Side wings, 40 mm each, angled outward and open at the front** — legal under
+   4.2/5.5, they funnel the ball into the plow. Keep them fixed and open; a wing that
+   closes counts as gripping.
+5. **12 V solenoid kicker (optional)** — one GPIO through a MOSFET and a flyback
+   diode. `KICKER_PIN` in `bot.py`; the fire only happens when the ball is close
+   AND the nose is on the goal, with a 2.2 s cooldown for rule 5.4.
+6. **Rubber tread or O-rings on the rollers** — the green field is slippery and
+   mecanum loses grip first.
+7. Kill switch (required, rule 4.5), battery in its box (required), team colour
+   markers on ≥2 sides (rule 2.3), cable tie everything (9.4: only one 30 s repair
+   per match).
+
+Budget check: 320 × 280 × 230 mm and 2.50 kg measured **with wings and kicker fully
+extended**. Plow 70 mm + base leaves you very little length — measure before you glue.
+
+## About "battle bots" / interrupting the other robots
+
+Legal, within limits, and the rules quietly reward it:
+
+- Bumping and body-blocking while chasing the ball is normal play — no rule against contact.
+- **Pinning** an opponent against the wall and not backing off is a foul (10.1).
+  The sonar back-off is exactly what keeps you legal here.
+- Two robots parking in front of your own goal gets you split up (12.3).
+- Sharp parts, anything that flips or damages, glue, flame → instant removal (4.4, 10.1).
+
+So don't build a weapon — build a robot that gets to the ball first and is heavy
+and low enough to shoulder people off it. With an ally on your side, the good play
+is one robot on the ball and one sitting between the ball and your own goal.
+
+## Tuning at the venue
+
+1. `python3 calibrate.py` — sliders until only the ball is white, press `s`.
+2. Drive on the field. If it strafes the wrong way set `invert_strafe: -1` in
+   `tune.json`; if it spins the wrong way set `invert_turn: -1`.
+3. Hold the ball where you want the robot to commit and read the printed `r` —
+   that number is your `close_radius`.
+4. Motors buzzing but not turning at low power → raise `min_duty`.
