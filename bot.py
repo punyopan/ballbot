@@ -81,6 +81,9 @@ def decide(ball, herr, front_cm, st, blind=False):
     if blind:
         # Can't find the ball, but the compass still knows where the goal is: push
         # that way and sweep, so a dead camera costs us the match instead of the game.
+        # Blind is exactly when we can't see a wall coming, so the sonar rules here.
+        if front_cm is not None and front_cm < T["wall_cm"]:
+            return (-T["speed"] * 0.5, 0.0, aim, False)
         sweep = 1.0 if (st["n"] // 30) % 2 == 0 else -1.0
         return (T["speed"] * 0.8, sweep * 0.35, aim, True)
     if ball is None:

@@ -71,6 +71,8 @@ def test_blind():
     ys = [decide(None, 0.0, None, st, blind=True)[1] for _ in range(90)]
     assert min(ys) < 0 < max(ys), "and sweep both ways instead of driving one line"
     assert len(set(ys)) == 2, "sweep is a slow flip, not per-frame jitter"
+    # blind is exactly when we can't see the wall coming, so the sonar has to win here
+    assert decide(None, 0.0, TUNE["wall_cm"] - 1, st, blind=True)[0] < 0, "back off a wall"
 
 
 def test_gyro():

@@ -102,6 +102,35 @@ sudo apt install pigpio && sudo systemctl enable --now pigpiod
 Then add `Environment=GPIOZERO_PIN_FACTORY=pigpio` to `ballbot.service`. Only do this
 **after** the robot already drives — if the daemon isn't running, `bot.py` won't start.
 
+## What you actually need
+
+More hardware is not better hardware. You have 2.50 kg and a 320 × 280 × 230 mm box,
+and every gadget spends both. A light robot that reaches the ball first beats a heavy
+one with a kicker on it.
+
+**Required — you fail inspection without these**
+kill switch (4.5), battery in its box (4.5), cables tied down (4.5), colour markers on
+two sides (2.3), all four mecanum wheels (4.4), a start button on the robot (2.2).
+
+**Worth it — these decide whether you win**
+- *IMU* — you already own the MPU-6050. Without a heading the robot cannot tell your
+  goal from theirs and will score own goals (6.1).
+- *Plow* — the cheapest performance on the list. Sheet plastic and an afternoon.
+- *Buck converter for the Pi* — stops the brownout that ends matches.
+- *Grip on the rollers* — mecanum loses traction first on a slick field.
+
+**Optional — skip these with no regret**
+- *Distance sensor.* The stuck-detector in `play()` already digs you out of most wall
+  grinds. It earns its place in one specific case: if the camera gets blinded, the
+  sonar is the only thing that knows a wall is there. Skip it if you're short on time.
+- *Wings.* Marginal, and they eat width you may want for the plow.
+- *BNO055.* Only once the MPU-6050's drift actually costs you a match.
+
+**Leave it off for your first competition**
+- *Solenoid kicker.* It adds weight, current spikes, wiring, and a new failure mode,
+  to do something a plow and full throttle already do. `bot.py` runs fine without one
+  (`KICKER_PIN = None`). Build it for the design prize (12.4) after you can score.
+
 ## Shopping list
 
 You already have the base kit (rule 4.1): Pi 4, 4 × mecanum, 4 motors, driver board,
