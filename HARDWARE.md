@@ -1,0 +1,144 @@
+# Hardware — wiring, parts, and the things that fry a Raspberry Pi
+
+The pin numbers here match the top of `bot.py` exactly. Change one, change both.
+
+## Pinout (BCM numbering)
+
+| GPIO | Goes to | Notes |
+|---|---|---|
+| 5, 6, 12 | Motor FL — IN1, IN2, ENA | 12 is hardware-PWM capable |
+| 13, 19, 18 | Motor FR — IN1, IN2, ENB | 18 is hardware-PWM capable |
+| 16, 20, 21 | Motor BL — IN1, IN2, ENA | |
+| 23, 24, 25 | Motor BR — IN1, IN2, ENB | |
+| 4 | Start button | other side to GND, `gpiozero` pulls it up internally |
+| 27 | Kicker MOSFET gate | through a 220 Ω resistor; omit if you skip the kicker |
+| 17, 22 | HC-SR04 echo, trigger | **echo needs a divider — see below** |
+| 2, 3 | I2C SDA, SCL | IMU. Don't reassign these, they're the hardware I2C |
+
+Nothing collides, and I2C is left clear. There are 12 pins on motors alone, so if you
+add anything later, take it from 7, 8, 9, 10, 11, 26.
+
+## Power — the thing that actually kills these robots
+
+Run **two rails from one battery pack**:
+
+```
+18650 pack ──┬── motor driver Vmotor   (sags hard when motors stall)
+             │
+             └── buck converter 5 V 3 A ── Pi 5 V   (stays clean)
+
+             all grounds tied together at ONE point
+```
+
+Four mecanum motors stalling against a wall pull the pack voltage down for a moment.
+If the Pi is on that same sagging rail it browns out, reboots, and your robot is a
+brick for the rest of the match — clock still running, and rule 9.4 gives you exactly
+one 30-second repair. A separate buck converter (or a plain USB power bank) for the
+Pi costs about 100 ฿ and removes the failure entirely.
+
+Do tie the grounds together. A motor driver and a Pi with separate grounds gives you
+random, unrepeatable misbehaviour that looks exactly like a software bug.
+
+## Wiring each part
+
+**Motor driver.** Two dual-channel boards for four motors. L298N is the one everyone
+has, but it burns ~2 V and gets hot; TB6612FNG is cheaper, cooler, and more efficient
+if you're still buying. Either way the wiring is the same three pins per motor.
+
+If a wheel spins backwards, swap its two motor wires at the driver — don't fix it in
+code. If the robot strafes or spins the wrong way as a whole, that's `invert_strafe` /
+`invert_turn` in `tune.json`.
+
+**MPU-6050 / GY-521.** VCC → 3.3 V, GND → GND, SDA → GPIO 2, SCL → GPIO 3. Mount it
+as far from the motors and their wires as you can: it's measuring rotation, and motor
+current makes magnetic noise. Enable I2C with `sudo raspi-config` → Interface Options.
+
+**BNO055, if you upgrade.** Same four wires. It clock-stretches and the Pi's I2C
+hardware can't cope, so add this to `/boot/firmware/config.txt` and reboot:
+
+```
+dtparam=i2c_arm_baudrate=10000
+```
+
+**HC-SR04 — read this or you damage the Pi.** Its echo pin outputs **5 V** and Pi GPIO
+takes a maximum of **3.3 V**. Put a divider on the echo line:
+
+```
+ECHO ──[ 1 kΩ ]──┬── GPIO 17
+                 │
+              [ 2 kΩ ]
+                 │
+                GND
+```
+
+Trigger (GPIO 22) is an output, so it needs nothing. If you're buying fresh, get a
+**VL53L0X** instead — it's I2C, natively 3.3 V, no divider, more accurate, and shares
+the two pins the IMU already uses.
+
+**Solenoid kicker (optional).** A 12 V solenoid pulls several amps, far more than a
+GPIO can do. You need:
+
+- a logic-level MOSFET (IRLZ44N — the "LZ" matters, a plain IRF44N won't switch fully at 3.3 V)
+- GPIO 27 → 220 Ω → gate, and a 10 kΩ from gate to GND so it stays off during boot
+- a flyback diode (1N5408) **across the solenoid coil**, band toward +12 V — without
+  it the collapsing coil spikes hundreds of volts back into your MOSFET and Pi
+- a big capacitor (1000 µF) across the 12 V rail to absorb the current slam
+
+`bot.py` fires it for 60 ms with a 2.2 s cooldown, which respects rule 5.4.
+
+**Start button.** Any momentary push button, one side GPIO 4, other side GND. Mount it
+where you can reach it without leaning over the field, and where you won't hit it by
+accident — a second press stops the robot.
+
+## Smoother motors (optional)
+
+`gpiozero` defaults to software PWM, which jitters a little and makes the four wheels
+slightly inconsistent. For hardware-timed PWM on every pin:
+
+```bash
+sudo apt install pigpio && sudo systemctl enable --now pigpiod
+```
+
+Then add `Environment=GPIOZERO_PIN_FACTORY=pigpio` to `ballbot.service`. Only do this
+**after** the robot already drives — if the daemon isn't running, `bot.py` won't start.
+
+## Shopping list
+
+You already have the base kit (rule 4.1): Pi 4, 4 × mecanum, 4 motors, driver board,
+camera, 18650 box.
+
+| Part | Why | Rough ฿ |
+|---|---|---|
+| Buck converter 5 V 3 A | separate Pi rail — **buy this first** | 60–120 |
+| Spare microSD, flashed | corruption from hard power-cuts is failure #2 | 150–250 |
+| Spare 18650 pack, charged | you play 4 matches (rule 8.1) | — |
+| MPU-6050 | heading — you already own one | ~60 |
+| BNO055 | heading that doesn't drift; the real upgrade | 300–500 |
+| VL53L0X or HC-SR04 | wall back-off, keeps you legal under 10.1 | 40–150 |
+| Rocker kill switch | **required** by 4.5 | ~20 |
+| IRLZ44N + 1N5408 + caps | kicker driver | ~60 |
+| 3 mm PVC or aluminium sheet | plow and wings | ~100 |
+| Rubber O-rings for rollers | the green field is slippery | ~50 |
+
+Prices vary a lot; treat them as order-of-magnitude.
+
+## Mechanical
+
+**Camera.** Low, behind the plow, tilted forward ~30° — not up on a mast where a
+knock, a cloth, or a ceiling light can take it out. Recess the lens in a short hood.
+Aim it so the ball is still in frame at about 15 cm; you'll find `close_radius` from
+what it reads there.
+
+**Plow.** A shallow curve, 70 mm forward max (rule 4.3), open at the top. It centres
+the ball while you drive. It must not become a pocket the ball cannot roll out of —
+that's gripping under 5.2 and it stops your wheels.
+
+**Wings.** 40 mm each side, angled outward, fixed and open at the front (4.2, 5.5).
+A wing that closes counts as gripping.
+
+**Weight.** 2.50 kg with battery, plow, wings and kicker all fitted, measured in
+competition pose. Weigh it early — the plow and a solenoid eat the margin fast, and
+inspection (ภาคผนวก ก) checks it before your first match.
+
+**Cables.** Tie everything down. Rule 4.5 wants no cables dragging, and rule 9.4 gives
+you one 30-second repair per match — a yanked motor wire spends it.

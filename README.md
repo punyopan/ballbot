@@ -12,6 +12,7 @@ motor driver board, 18650 battery box. Everything below is legal modification.
 | `test_bot.py` | self-check for the driving maths and the strategy, runs on a laptop |
 | `tune.json` | written by calibrate; every number you'd want to change at the venue |
 | `ballbot.service` | starts `bot.py` at power-on, because rule 9.1.3 bans laptops at the field |
+| `HARDWARE.md` | pinout, power, wiring, shopping list |
 
 ```bash
 python3 test_bot.py     # maths sanity, no hardware needed
