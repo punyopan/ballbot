@@ -2,7 +2,9 @@
 """Ball-touch robot: 100% autonomous, Raspberry Pi 4 + 4x mecanum + top camera.
 
   python3 bot.py         run for real (press the start button once)
-  python3 bot.py --dry   no motors, prints what it would do (test on a laptop)
+  python3 bot.py --check  prove numpy/cv2/camera/IMU work on this board
+  python3 bot.py --motors bring-up: wheel directions, WHEELS OFF THE GROUND
+  python3 bot.py --dry    no motors, prints what it would do (test on a laptop)
   python3 calibrate.py   tune the ball colour at the venue -> tune.json
 
 Rules this code is built around:
@@ -350,9 +352,37 @@ def wheeltest():
     print("All four right but spin is backwards     -> tune.json  invert_turn: -1")
 
 
+def motortest():
+    """python3 bot.py --motors - PUT THE ROBOT ON A BOX, WHEELS OFF THE GROUND.
+
+    First each wheel alone: every one must spin so its top goes FORWARD. If one runs
+    backwards, swap that motor's two wires at the driver - fix it in the wiring, not
+    in code. Then the whole-robot moves: if those are wrong once the wheels are right,
+    that's invert_strafe / invert_turn in tune.json.
+    """
+    bot = Robot()
+    try:
+        for i, name in enumerate(("FL", "FR", "BL", "BR")):
+            print("wheel %s alone - top of the wheel should roll FORWARD" % name)
+            for j, m in enumerate(bot.motors or []):
+                m.value = 0.4 if i == j else 0.0
+            time.sleep(1.5)
+            bot.stop(); time.sleep(0.7)
+        for name, vx, vy, w in (("FORWARD", 0.5, 0, 0), ("BACKWARD", -0.5, 0, 0),
+                                ("STRAFE LEFT", 0, 0.5, 0), ("STRAFE RIGHT", 0, -0.5, 0),
+                                ("SPIN LEFT", 0, 0, 0.5), ("SPIN RIGHT", 0, 0, -0.5)):
+            print("robot should go:", name)
+            bot.drive(vx, vy, w); time.sleep(1.5)
+            bot.stop(); time.sleep(0.7)
+    finally:
+        bot.stop()
+
+
 def main():
     if "--check" in sys.argv:
         return selftest()
+    if "--motors" in sys.argv:
+        return motortest()
     if "--wheels" in sys.argv:
         return wheeltest()
     bot = Robot()
