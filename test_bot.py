@@ -49,7 +49,16 @@ def test_decide():
     assert st["spin"] == -1, "remembers which way the ball went for the next search"
 
 
-for fn in (test_mix, test_angle_diff, test_decide):
+def test_blind():
+    st = {}
+    vx, vy, w, kick = decide(None, 90.0, None, st, blind=True)
+    assert vx > 0 and w > 0, "camera dead: still drive on the compass toward the goal"
+    ys = [decide(None, 0.0, None, st, blind=True)[1] for _ in range(90)]
+    assert min(ys) < 0 < max(ys), "and sweep both ways instead of driving one line"
+    assert len(set(ys)) == 2, "sweep is a slow flip, not per-frame jitter"
+
+
+for fn in (test_mix, test_angle_diff, test_decide, test_blind):
     fn()
     print("ok", fn.__name__)
 print("all good")

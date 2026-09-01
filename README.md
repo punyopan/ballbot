@@ -70,6 +70,23 @@ So don't build a weapon — build a robot that gets to the ball first and is hea
 and low enough to shoulder people off it. With an ally on your side, the good play
 is one robot on the ball and one sitting between the ball and your own goal.
 
+## If someone tries to blind the camera
+
+Not explicitly banned by 4.4 (which lists sharp parts, liquid, glue, flame, smoke),
+but 1.3 and 10.3 give the referee the final call and this would almost certainly get
+stopped — and a cloth launcher spends their 2.5 kg and 320 mm on something that
+scores zero goals. Still, a blinded camera also happens from glare, a knock, or
+another robot parking in your face, so it's handled:
+
+- `is_blind()` — anything pressed on a lens defocuses to a flat blur, so the frame
+  loses almost all contrast. Below `blind_std` for `blind_frames` in a row = blind.
+- Blind mode ignores the camera and drives on the **compass** toward the enemy goal,
+  sweeping side to side and kicking. A dead camera costs you the ball, not the match.
+  This only works if you fitted the IMU — one more reason it's item 1 on the list.
+- Physically: recess the lens in a short hood or tube, and tilt it forward ~30° so
+  a falling cloth slides off instead of lying flat on it. Mount it low behind the
+  plow, not on top of a mast where anything can land on it.
+
 ## Tuning at the venue
 
 1. `python3 calibrate.py` — sliders until only the ball is white, press `s`.

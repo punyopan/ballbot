@@ -38,6 +38,8 @@ DEFAULTS = {
     "invert_turn": 1,        # flip to -1 if it spins the wrong way
     "min_duty": 0.22,        # below this a motor just buzzes
     "kick_cooldown": 2.2,    # rule 5.4: no re-grab within 2 s of a throw
+    "blind_std": 12,         # frame contrast below this = lens covered
+    "blind_frames": 15,      # ~0.5 s of that before we believe it
 }
 _tf = os.path.join(HERE, "tune.json")
 TUNE = {**DEFAULTS, **(json.load(open(_tf)) if os.path.exists(_tf) else {})}
@@ -60,17 +62,24 @@ def angle_diff(target, current):
     return (target - current + 180) % 360 - 180
 
 
-def decide(ball, herr, front_cm, st):
+def decide(ball, herr, front_cm, st, blind=False):
     """ball = (dx in -1..1, radius_px) or None.
     herr = degrees we must turn counter-clockwise to face the enemy goal (None = no IMU).
+    blind = the camera can't see anything (covered, knocked, or blown out).
     Returns (vx, vy, w, kick)."""
     T = TUNE
+    st["n"] = st.get("n", 0) + 1
+    aim = 0.0 if herr is None else clamp(herr * T["turn_gain"] / 90.0)
+    if blind:
+        # Can't find the ball, but the compass still knows where the goal is: push
+        # that way and sweep, so a dead camera costs us the match instead of the game.
+        sweep = 1.0 if (st["n"] // 30) % 2 == 0 else -1.0
+        return (T["speed"] * 0.8, sweep * 0.35, aim, True)
     if ball is None:
         # spin toward wherever the ball went last, easing back so we don't camp the mouth
         return (-0.12, 0.0, st.get("spin", 1) * T["search_spin"], False)
     dx, r = ball
     st["spin"] = 1 if dx < 0 else -1
-    aim = 0.0 if herr is None else clamp(herr * T["turn_gain"] / 90.0)
     if front_cm is not None and front_cm < T["wall_cm"] and r < T["close_radius"]:
         return (-T["speed"], 0.0, st.get("spin", 1) * 0.3, False)  # 10.1: peel off the wall
     if r >= T["close_radius"]:
@@ -148,6 +157,12 @@ def open_camera():
         return lambda: cap.read()[1]
 
 
+def is_blind(frame):
+    """Anything pressed against a lens defocuses to a flat blur, so a covered
+    camera has almost no contrast. Also catches a dead camera or a dark frame."""
+    return frame is None or frame.std() < TUNE["blind_std"]
+
+
 def find_ball(frame):
     """-> (dx in -1..1, radius_px) or None."""
     import cv2, numpy as np
@@ -170,10 +185,13 @@ def play(bot, grab, goal_heading, t_end):
     while time.time() < t_end:
         if bot.button and bot.button.is_pressed:     # second press = stop
             break
-        ball = find_ball(grab())
+        frame = grab()
+        st["blind"] = st.get("blind", 0) + 1 if is_blind(frame) else 0
+        blind = st["blind"] > TUNE["blind_frames"]
+        ball = None if blind else find_ball(frame)
         h = bot.heading()
         herr = None if (h is None or goal_heading is None) else -angle_diff(goal_heading, h)
-        vx, vy, w, kick = decide(ball, herr, bot.front_cm(), st)
+        vx, vy, w, kick = decide(ball, herr, bot.front_cm(), st, blind)
 
         now = time.time()
         r = ball[1] if ball else 0.0
