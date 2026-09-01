@@ -36,6 +36,15 @@ So: open front, ball always able to roll out. All the code assumes this.
    at the enemy goal and press the button — that heading is remembered for 12 minutes.
    `bot.py` already reads it and orbits the ball until the nose points at the goal.
    No IMU → the code still works, it just chases the ball blindly.
+   **Already own an MPU-6050?** It works — `bot.py` falls back to it automatically
+   (`pip3 install smbus2`). It has no magnetometer, so it only knows how far you have
+   turned since start, and that estimate creeps. Two things make it good enough:
+   the startup bias calibration (**keep the robot dead still** while it prints
+   "calibrating gyro" — skip this and it drifts degrees per *second*), and rule 6.3,
+   which restarts the match after every goal so you re-aim and re-zero constantly.
+   If it turns away from the goal instead of toward it, set `imu_sign: -1`.
+   Buy the BNO055 when you can: it survives a long goalless stretch, the MPU-6050 is
+   the one that quietly goes wrong around minute five.
 2. **Curved front plow, ~70 mm deep, open top** — the whole 70 mm forward allowance
    in rule 4.3. A shallow V centres the ball while you drive so you can push straight.
    Aluminium or 3 mm PVC sheet. Not a cage (rule 4.4).

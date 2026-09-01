@@ -2,7 +2,7 @@
 """Self-check for the driving maths and the strategy. Run: python3 test_bot.py"""
 import sys
 sys.argv.append("--dry")
-from bot import mix, angle_diff, decide, TUNE
+from bot import mix, angle_diff, decide, gyro_step, Gyro, TUNE
 
 
 def approx(a, b, tol=1e-6):
@@ -58,7 +58,24 @@ def test_blind():
     assert len(set(ys)) == 2, "sweep is a slow flip, not per-frame jitter"
 
 
-for fn in (test_mix, test_angle_diff, test_decide, test_blind):
+def test_gyro():
+    # turning counter-clockwise must make the clockwise compass heading go DOWN
+    assert gyro_step(10.0, 5.0, 1.0) == 5.0
+    assert gyro_step(2.0, 5.0, 1.0) == 357.0, "wraps below zero"
+    assert gyro_step(10.0, 5.0, 1.0, sign=-1) == 15.0, "imu_sign flips a bad mounting"
+    assert gyro_step(90.0, 0.0, 10.0) == 90.0, "sitting still never drifts the maths"
+
+    class FakeBus:  # a gyro that reads a steady +2 deg/s of real rotation off zero bias
+        def read_i2c_block_data(self, addr, reg, n):
+            return [1, 6]  # 262 raw = 2.0 deg/s at 131 LSB per deg/s
+
+    g = Gyro(bus=FakeBus())
+    assert abs(g.bias - 262.0) < 1e-6, "bias calibration soaks up a constant offset"
+    g.t -= 1.0
+    assert abs(g.heading() - 0.0) < 1e-6, "so the same reading now means 'not turning'"
+
+
+for fn in (test_mix, test_angle_diff, test_decide, test_blind, test_gyro):
     fn()
     print("ok", fn.__name__)
 print("all good")

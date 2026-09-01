@@ -40,6 +40,7 @@ DEFAULTS = {
     "kick_cooldown": 2.2,    # rule 5.4: no re-grab within 2 s of a throw
     "blind_std": 12,         # frame contrast below this = lens covered
     "blind_frames": 15,      # ~0.5 s of that before we believe it
+    "imu_sign": 1,           # flip to -1 if the MPU-6050 is mounted upside down
 }
 _tf = os.path.join(HERE, "tune.json")
 TUNE = {**DEFAULTS, **(json.load(open(_tf)) if os.path.exists(_tf) else {})}
@@ -60,6 +61,12 @@ def mix(vx, vy, w):
 def angle_diff(target, current):
     """Signed degrees from current to target, in [-180, 180)."""
     return (target - current + 180) % 360 - 180
+
+
+def gyro_step(h, rate, dt, sign=1):
+    """Fold a turn rate (deg/s, + = counter-clockwise) into a clockwise compass
+    heading, so an MPU-6050 reads the same way round as a BNO055."""
+    return (h - rate * dt * sign) % 360
 
 
 def decide(ball, herr, front_cm, st, blind=False):
@@ -91,11 +98,45 @@ def decide(ball, herr, front_cm, st, blind=False):
 
 
 # ---------------------------------------------------------------- hardware
+class Gyro:
+    """MPU-6050 fallback. Six axes, no magnetometer, so this is dead reckoning: it
+    tells you how far you have turned since start, not where north is, and the error
+    creeps up over the match. Two things keep it usable:
+      - the bias calibration below (skip it and you drift degrees per SECOND)
+      - rule 6.3 restarts the match after every goal, so you re-aim and re-zero often
+    """
+    ADDR, SCALE = 0x68, 131.0   # LSB per deg/s at the default +-250 deg/s range
+
+    def __init__(self, bus=None):
+        if bus is None:
+            from smbus2 import SMBus
+            bus = SMBus(1)
+            bus.write_byte_data(self.ADDR, 0x6B, 0)   # wake it up
+            time.sleep(0.1)
+        self.bus, self.bias = bus, 0.0
+        print("calibrating gyro - keep the robot COMPLETELY still")
+        self.bias = sum(self._raw() for _ in range(200)) / 200.0
+        self.h, self.t = 0.0, time.time()
+
+    def _raw(self):
+        hi, lo = self.bus.read_i2c_block_data(self.ADDR, 0x47, 2)  # GYRO_ZOUT
+        v = (hi << 8) | lo
+        return v - 65536 if v > 32767 else v
+
+    def heading(self):
+        now = time.time()
+        dt = min(now - self.t, 0.1)   # a long stall shouldn't integrate one sample forever
+        self.h = gyro_step(self.h, (self._raw() - self.bias) / self.SCALE, dt,
+                           TUNE["imu_sign"])
+        self.t = now
+        return self.h
+
+
 class Robot:
     """Every device is optional; whatever isn't wired up degrades to None."""
 
     def __init__(self):
-        self.motors = self.button = self.kicker = self.sonar = self.imu = None
+        self.motors = self.button = self.kicker = self.sonar = self.heading_fn = None
         if DRY:
             return
         from gpiozero import Motor, Button, OutputDevice
@@ -109,9 +150,13 @@ class Robot:
             self.sonar = DistanceSensor(echo=SONAR_PINS[0], trigger=SONAR_PINS[1], max_distance=1.0)
         try:
             import board, adafruit_bno055
-            self.imu = adafruit_bno055.BNO055_I2C(board.I2C())
-        except Exception as e:      # no IMU -> we just chase the ball, no goal lock
-            print("no IMU (%s); heading lock off" % e)
+            bno = adafruit_bno055.BNO055_I2C(board.I2C())
+            self.heading_fn = lambda: bno.euler[0]
+        except Exception:
+            try:
+                self.heading_fn = Gyro().heading
+            except Exception as e:  # no IMU at all -> chase the ball, no goal lock
+                print("no IMU (%s); heading lock off" % e)
 
     def drive(self, vx, vy, w):
         vy *= TUNE["invert_strafe"]
@@ -129,10 +174,8 @@ class Robot:
         self.drive(0, 0, 0)
 
     def heading(self):
-        """Compass degrees, or None. BNO055 counts clockwise."""
-        if self.imu is None:
-            return None
-        return self.imu.euler[0]
+        """Degrees, counting clockwise, or None if no IMU is fitted."""
+        return None if self.heading_fn is None else self.heading_fn()
 
     def front_cm(self):
         return None if self.sonar is None else self.sonar.distance * 100
@@ -198,7 +241,11 @@ def play(bot, grab, goal_heading, t_end):
         if ball is None or abs(r - last_r) > 3:
             stuck_since, last_r = now, r
         elif now - stuck_since > 2.5:                # wedged: shove out and look again
-            bot.drive(-0.8, 0.5, 0.6); time.sleep(0.6); stuck_since = now
+            bot.drive(-0.8, 0.5, 0.6)
+            while time.time() - now < 0.6:
+                bot.heading()                        # keep the gyro integrating while we thrash
+                time.sleep(0.02)
+            stuck_since = now
             continue
         if kick and now - last_kick > TUNE["kick_cooldown"]:
             bot.kick(); last_kick = now
