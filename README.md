@@ -40,6 +40,32 @@ Only if you buy a BNO055 later (pip is unavoidable for this one):
 sudo pip3 install --break-system-packages adafruit-circuitpython-bno055
 ```
 
+### "Illegal instruction (core dumped)"
+
+That means a prebuilt wheel was compiled for a different CPU than yours. pip serves
+one ARM wheel to every board; apt builds against the exact architecture of your OS
+image. It's nearly always `numpy` or `opencv` installed from pip, and it can appear
+*months* later when a code path first reaches the bad instruction — which is why it
+loves competition day.
+
+```bash
+python3 bot.py --check
+```
+
+That prints your architecture, where `numpy` and `cv2` were actually loaded from
+(`/usr/lib/...` = apt = good), runs real matrix maths to hit the BLAS code that
+usually dies, then reads the IMU and grabs one camera frame. Run it after any
+install, and again the morning of the competition.
+
+If it flags pip copies, remove them and let apt's win:
+
+```bash
+sudo pip3 uninstall -y numpy opencv-python opencv-contrib-python
+```
+
+Never mix: 64-bit wheels on a 32-bit OS image fail the same way. `uname -m` tells you
+which you're on.
+
 Nothing above is needed to run the tests — those are pure Python:
 
 ```bash

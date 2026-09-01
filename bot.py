@@ -296,7 +296,40 @@ def play(bot, grab, goal_heading, t_end):
     bot.stop()
 
 
+def selftest():
+    """python3 bot.py --check - proves the whole stack works ON THIS BOARD.
+
+    "Illegal instruction" means a prebuilt wheel was compiled for a different CPU
+    than yours. pip serves one wheel to every ARM board; apt builds for the exact
+    architecture of your OS image. So the fix is always the same: get numpy and
+    OpenCV from apt, and check below that they really came from there.
+    """
+    import platform, numpy, cv2
+    arch = platform.machine()
+    on_arm = arch.startswith(("arm", "aarch"))
+    print("machine     :", arch, " (aarch64 = 64-bit Pi OS, armv7l = 32-bit)")
+    for mod in (numpy, cv2):
+        apt = "/usr/lib/" in mod.__file__
+        note = "apt, good" if apt else (
+            "PIP - the usual cause of Illegal instruction on a Pi" if on_arm
+            else "pip, fine off-Pi")
+        print("%-12s: %-9s %s  <- %s" % (mod.__name__, mod.__version__, mod.__file__, note))
+    # numpy usually dies in BLAS rather than on import, so actually do some maths
+    print("numpy maths :", numpy.zeros((32, 32)).dot(numpy.ones((32, 32))).sum(), "(want 0.0)")
+    bot = Robot()
+    print("heading     :", bot.heading(), " front_cm:", bot.front_cm())
+    frame = open_camera()()
+    print("camera      :", "NO FRAME" if frame is None else
+          "%s contrast %.1f%s" % (frame.shape, frame.std(),
+                                  "  BLIND - lens covered?" if is_blind(frame) else ""))
+    if frame is not None:
+        print("ball        :", find_ball(frame), " (aim the camera at the ball)")
+    bot.stop()
+
+
 def main():
+    if "--check" in sys.argv:
+        return selftest()
     bot = Robot()
     grab = open_camera()
     left = 12 * 60
