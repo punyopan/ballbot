@@ -42,6 +42,8 @@ DEFAULTS = {
     "blind_frames": 15,      # ~0.5 s of that before we believe it
     "imu_sign": 1,           # flip to -1 if the MPU-6050 is mounted upside down
     "ball_memory": 25,       # frames to keep pushing after the plow hides the ball
+    "motion_min": 2.5,       # frame-to-frame pixel change below this = we aren't moving
+    "stuck_secs": 2.5,       # how long that has to hold before we thrash free
 }
 _tf = os.path.join(HERE, "tune.json")
 TUNE = {**DEFAULTS, **(json.load(open(_tf)) if os.path.exists(_tf) else {})}
@@ -68,6 +70,14 @@ def gyro_step(h, rate, dt, sign=1):
     """Fold a turn rate (deg/s, + = counter-clockwise) into a clockwise compass
     heading, so an MPU-6050 reads the same way round as a BNO055."""
     return (h - rate * dt * sign) % 360
+
+
+def should_escape(still, blind, asking_to_move, stalled_for):
+    """Stuck means the WORLD stopped moving while we asked the wheels for movement.
+    Do not measure this with the ball's size: pushing the ball down the field holds
+    its radius rock steady for seconds, and that is the one moment we must never
+    interrupt. Needs a working camera, so a blinded robot never calls itself stuck."""
+    return still and not blind and asking_to_move and stalled_for > TUNE["stuck_secs"]
 
 
 def decide(ball, herr, front_cm, st, blind=False):
@@ -124,6 +134,12 @@ class Gyro:
             bus.write_byte_data(self.ADDR, 0x6B, 0)   # wake it up
             time.sleep(0.1)
         self.bus, self.bias = bus, 0.0
+        self.zero()
+
+    def zero(self):
+        """Re-measure the resting bias, robot STILL. Called at every start press, not
+        at boot: systemd starts us while the robot is still being carried to the field,
+        and a bias measured while moving poisons the heading for the whole match."""
         print("calibrating gyro - keep the robot COMPLETELY still")
         self.bias = sum(self._raw() for _ in range(200)) / 200.0
         self.h, self.t = 0.0, time.time()
@@ -146,7 +162,8 @@ class Robot:
     """Every device is optional; whatever isn't wired up degrades to None."""
 
     def __init__(self):
-        self.motors = self.button = self.kicker = self.sonar = self.heading_fn = None
+        self.motors = self.button = self.kicker = self.sonar = None
+        self.heading_fn = self.gyro = None
         if DRY:
             return
         from gpiozero import Motor, Button, OutputDevice
@@ -164,9 +181,14 @@ class Robot:
             self.heading_fn = lambda: bno.euler[0]
         except Exception:
             try:
-                self.heading_fn = Gyro().heading
+                self.gyro = Gyro()
+                self.heading_fn = self.gyro.heading
             except Exception as e:  # no IMU at all -> chase the ball, no goal lock
                 print("no IMU (%s); heading lock off" % e)
+
+    def zero_heading(self):
+        if self.gyro:
+            self.gyro.zero()
 
     def drive(self, vx, vy, w):
         vy *= TUNE["invert_strafe"]
@@ -234,28 +256,35 @@ def find_ball(frame):
 
 # ---------------------------------------------------------------- main
 def play(bot, grab, goal_heading, t_end):
-    st, last_kick, stuck_since, last_r = {"spin": 1}, 0.0, time.time(), 0.0
+    import numpy as np
+    st, last_kick, stuck_since, prev = {"spin": 1}, 0.0, time.time(), None
     while time.time() < t_end:
         if bot.button and bot.button.is_pressed:     # second press = stop
             break
         frame = grab()
         st["blind"] = st.get("blind", 0) + 1 if is_blind(frame) else 0
         blind = st["blind"] > TUNE["blind_frames"]
-        ball = None if blind else find_ball(frame)
+        # A dropped frame reads as None. Don't hand that to OpenCV - it throws, and a
+        # crash mid-match costs far more than a skipped frame.
+        ball = None if (blind or frame is None) else find_ball(frame)
         h = bot.heading()
         herr = None if (h is None or goal_heading is None) else -angle_diff(goal_heading, h)
         vx, vy, w, kick = decide(ball, herr, bot.front_cm(), st, blind)
 
         now = time.time()
-        r = ball[1] if ball else 0.0
-        if ball is None or abs(r - last_r) > 3:
-            stuck_since, last_r = now, r
-        elif now - stuck_since > 2.5:                # wedged: shove out and look again
+        small = None if frame is None else frame[::8, ::8].astype(np.int16)
+        still = (small is not None and prev is not None and prev.shape == small.shape
+                 and np.abs(small - prev).mean() < TUNE["motion_min"])
+        prev = small
+        if not should_escape(still, blind, max(abs(vx), abs(vy), abs(w)) > 0.1,
+                             now - stuck_since):
+            stuck_since = now
+        else:                                        # wedged: thrash out and look again
             bot.drive(-0.8, 0.5, 0.6)
             while time.time() - now < 0.6:
-                bot.heading()                        # keep the gyro integrating while we thrash
+                bot.heading()                        # keep the gyro integrating meanwhile
                 time.sleep(0.02)
-            stuck_since = now
+            stuck_since = time.time()
             continue
         if kick and now - last_kick > TUNE["kick_cooldown"]:
             bot.kick(); last_kick = now
@@ -267,15 +296,19 @@ def play(bot, grab, goal_heading, t_end):
 def main():
     bot = Robot()
     grab = open_camera()
+    left = 12 * 60
     try:
-        while True:
+        while left > 0:
             print("point the robot at the ENEMY goal, then press start")
             if bot.button:
                 bot.button.wait_for_press(); bot.button.wait_for_release()
+            bot.zero_heading()      # robot is placed and still now; boot time was not
             goal_heading = bot.heading()
-            print("go. goal heading =", goal_heading)
-            play(bot, grab, goal_heading, time.time() + 12 * 60)
-            print("stopped")
+            print("go. %.0f s left, goal heading = %s" % (left, goal_heading))
+            t0 = time.time()
+            play(bot, grab, goal_heading, t0 + (5 if DRY else left))
+            left -= time.time() - t0   # 6.3: a goal stops the clock, it doesn't reset it
+            print("stopped, %.0f s left" % max(left, 0))
             if DRY:
                 return
     except KeyboardInterrupt:

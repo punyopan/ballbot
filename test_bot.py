@@ -2,7 +2,7 @@
 """Self-check for the driving maths and the strategy. Run: python3 test_bot.py"""
 import sys
 sys.argv.append("--dry")
-from bot import mix, angle_diff, decide, gyro_step, Gyro, TUNE
+from bot import mix, angle_diff, decide, gyro_step, should_escape, Gyro, TUNE
 
 
 def approx(a, b, tol=1e-6):
@@ -75,6 +75,17 @@ def test_blind():
     assert decide(None, 0.0, TUNE["wall_cm"] - 1, st, blind=True)[0] < 0, "back off a wall"
 
 
+def test_should_escape():
+    long_enough = TUNE["stuck_secs"] + 1
+    assert should_escape(True, False, True, long_enough), "frozen while driving = wedged"
+    assert not should_escape(False, False, True, long_enough), "the view is still changing"
+    assert not should_escape(True, False, True, TUNE["stuck_secs"] - 0.1), "too soon"
+    assert not should_escape(True, False, False, long_enough), "we asked it to sit still"
+    # the regression that matters: a good push holds the ball's size steady for
+    # seconds, and the old radius-based check reversed away from the ball right then
+    assert not should_escape(True, True, True, long_enough), "a blind camera can't judge motion"
+
+
 def test_gyro():
     # turning counter-clockwise must make the clockwise compass heading go DOWN
     assert gyro_step(10.0, 5.0, 1.0) == 5.0
@@ -92,7 +103,7 @@ def test_gyro():
     assert abs(g.heading() - 0.0) < 1e-6, "so the same reading now means 'not turning'"
 
 
-for fn in (test_mix, test_angle_diff, test_decide, test_ball_memory, test_blind, test_gyro):
+for fn in (test_mix, test_angle_diff, test_decide, test_ball_memory, test_blind, test_should_escape, test_gyro):
     fn()
     print("ok", fn.__name__)
 print("all good")
