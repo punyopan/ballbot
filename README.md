@@ -14,6 +14,34 @@ motor driver board, 18650 battery box. Everything below is legal modification.
 | `ballbot.service` | starts `bot.py` at power-on, because rule 9.1.3 bans laptops at the field |
 | `HARDWARE.md` | pinout, power, wiring, shopping list |
 
+## Install (Raspberry Pi OS Bookworm)
+
+Everything comes from apt. Don't use pip here: `picamera2` is built against the
+system `libcamera` and a pip copy won't find it, and Bookworm blocks system-wide pip
+anyway (`externally-managed-environment`).
+
+```bash
+sudo apt update && sudo apt install -y python3-opencv python3-picamera2 python3-gpiozero python3-smbus i2c-tools
+```
+
+Then turn on the interfaces — `sudo raspi-config` → Interface Options → **I2C** on,
+and **Camera** on if your image still lists it. Reboot, then check the IMU answers:
+
+```bash
+i2cdetect -y 1
+```
+
+`68` in the grid is the MPU-6050, `28` or `29` is a BNO055. An empty grid means
+wiring, not software — check 3.3 V, GND, SDA on GPIO 2, SCL on GPIO 3.
+
+Only if you buy a BNO055 later (pip is unavoidable for this one):
+
+```bash
+sudo pip3 install --break-system-packages adafruit-circuitpython-bno055
+```
+
+Nothing above is needed to run the tests — those are pure Python:
+
 ```bash
 python3 test_bot.py     # maths sanity, no hardware needed
 ```

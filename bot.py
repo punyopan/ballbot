@@ -129,7 +129,10 @@ class Gyro:
 
     def __init__(self, bus=None):
         if bus is None:
-            from smbus2 import SMBus
+            try:
+                from smbus2 import SMBus
+            except ImportError:
+                from smbus import SMBus   # apt's python3-smbus, same two calls we make
             bus = SMBus(1)
             bus.write_byte_data(self.ADDR, 0x6B, 0)   # wake it up
             time.sleep(0.1)
