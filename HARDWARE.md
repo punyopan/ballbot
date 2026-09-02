@@ -47,6 +47,24 @@ mistakes at once is what turns an afternoon into a week.
 **Motor driver.** Two dual-channel boards for four motors. L298N is the one everyone
 has, but it burns ~2 V and gets hot; TB6612FNG is cheaper, cooler, and more efficient
 if you're still buying. Either way the wiring is the same three pins per motor.
+Split them **driver A = FL + FR**, **driver B = BL + BR**, matching `MOTORS` in `bot.py`.
+
+Both drivers take **battery voltage directly** — they do *not* run through the buck
+converter. The buck exists to keep motor sag off the Pi; putting the motors behind it
+undoes that and overloads it besides.
+
+Three things that will bite you with two drivers:
+
+- **Take the ENA/ENB jumpers off.** They ship jumpered to 5 V, meaning "always full
+  speed". The code PWMs the enable pin (the third pin in each `MOTORS` entry), so with
+  the jumpers on, every speed value in `tune.json` does nothing. This is the most
+  common reason mecanum code appears not to work.
+- **Both drivers' GND must reach the Pi's GND**, not just the battery negative. The
+  direction and PWM signals are measured against that reference, and without it the
+  motors misbehave in a way that looks exactly like a software bug.
+- **Leave each driver's 5 V pin unconnected.** With its jumper on that pin is an
+  *output* from a small onboard regulator — nowhere near enough for a Pi 4, and it
+  would fight the buck converter.
 
 *Check it* — robot up on a box, wheels hanging free:
 
@@ -103,8 +121,13 @@ the two pins the IMU already uses.
 sensor and run it again; the number should drop. `None` means `SONAR_PINS` is set to
 `None` in `bot.py`, and a number stuck at 100 means it never hears an echo.
 
-**Solenoid kicker (optional).** A 12 V solenoid pulls several amps, far more than a
-GPIO can do. You need:
+**Solenoid kicker — skip this for your first competition.** Set `KICKER_PIN = None` in
+`bot.py` and the rest of the robot works exactly as it is. A plow at full throttle
+already puts the ball in the goal; a kicker spends weight, length, current and one more
+brownout risk to do the same job. Build it later for the design prize (12.4).
+
+If you do build one, a 12 V solenoid pulls several amps, far more than a GPIO can do.
+You need:
 
 - a logic-level MOSFET (IRLZ44N — the "LZ" matters, a plain IRF44N won't switch fully at 3.3 V)
 - GPIO 27 → 220 Ω → gate, and a 10 kΩ from gate to GND so it stays off during boot
