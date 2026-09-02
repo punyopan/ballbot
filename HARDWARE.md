@@ -41,17 +41,41 @@ random, unrepeatable misbehaviour that looks exactly like a software bug.
 
 ## Wiring each part
 
+Wire one thing, then run its check below before wiring the next. Debugging four
+mistakes at once is what turns an afternoon into a week.
+
 **Motor driver.** Two dual-channel boards for four motors. L298N is the one everyone
 has, but it burns ~2 V and gets hot; TB6612FNG is cheaper, cooler, and more efficient
 if you're still buying. Either way the wiring is the same three pins per motor.
 
-If a wheel spins backwards, swap its two motor wires at the driver — don't fix it in
-code. If the robot strafes or spins the wrong way as a whole, that's `invert_strafe` /
-`invert_turn` in `tune.json`.
+*Check it* — robot up on a box, wheels hanging free:
+
+```bash
+python3 bot.py --wheels
+```
+
+It spins each wheel alone first, then does the six whole-robot moves, announcing each
+one. If a single wheel spins backwards, swap **that motor's two wires at the driver** —
+don't fix it in code, or strafing goes diagonal later. Once all four are right, if the
+robot as a whole strafes or spins the wrong way, that's `invert_strafe` / `invert_turn`
+in `tune.json`. A wheel that buzzes without turning wants a higher `min_duty`.
 
 **MPU-6050 / GY-521.** VCC → 3.3 V, GND → GND, SDA → GPIO 2, SCL → GPIO 3. Mount it
 as far from the motors and their wires as you can: it's measuring rotation, and motor
 current makes magnetic noise. Enable I2C with `sudo raspi-config` → Interface Options.
+
+*Check it* — `sudo apt install i2c-tools`, then:
+
+```bash
+i2cdetect -y 1
+```
+
+`68` in the grid is the MPU-6050. An empty grid is always wiring, never software.
+`python3 bot.py --check` then prints a live heading; turn the robot by hand and it
+should change, and settle when you stop. If it counts the wrong way, `imu_sign: -1`.
+
+The code reads it through `smbus` (apt's `python3-smbus`) or `smbus2` if you happen to
+have it — no pip needed either way.
 
 **BNO055, if you upgrade.** Same four wires. It clock-stretches and the Pi's I2C
 hardware can't cope, so add this to `/boot/firmware/config.txt` and reboot:
@@ -75,6 +99,10 @@ Trigger (GPIO 22) is an output, so it needs nothing. If you're buying fresh, get
 **VL53L0X** instead — it's I2C, natively 3.3 V, no divider, more accurate, and shares
 the two pins the IMU already uses.
 
+*Check it* — `python3 bot.py --check` prints `front_cm`. Put your hand in front of the
+sensor and run it again; the number should drop. `None` means `SONAR_PINS` is set to
+`None` in `bot.py`, and a number stuck at 100 means it never hears an echo.
+
 **Solenoid kicker (optional).** A 12 V solenoid pulls several amps, far more than a
 GPIO can do. You need:
 
@@ -89,6 +117,15 @@ GPIO can do. You need:
 **Start button.** Any momentary push button, one side GPIO 4, other side GND. Mount it
 where you can reach it without leaning over the field, and where you won't hit it by
 accident — a second press stops the robot.
+
+*Check it* — run `python3 bot.py`. It waits at "point the robot at the ENEMY goal,
+then press start" and only moves once you press. If it starts on its own, the button
+is wired to 3.3 V instead of GND.
+
+**Camera.** *Check it* — `python3 bot.py --check` prints the frame size and a contrast
+number. `NO FRAME` means the camera isn't detected at all; `BLIND` means it sees
+something but with almost no contrast, which is a lens cap, a dark room, or a ribbon
+cable in the wrong way round.
 
 ## Smoother motors (optional)
 
