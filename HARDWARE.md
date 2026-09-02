@@ -133,7 +133,38 @@ You need:
 - GPIO 27 → 220 Ω → gate, and a 10 kΩ from gate to GND so it stays off during boot
 - a flyback diode (1N5408) **across the solenoid coil**, band toward +12 V — without
   it the collapsing coil spikes hundreds of volts back into your MOSFET and Pi
-- a big capacitor (1000 µF) across the 12 V rail to absorb the current slam
+- a big capacitor (1000 µF, 25 V) across the 12 V rail to absorb the current slam —
+  it's an electrolytic, so mind the polarity stripe
+- **a 5 A inline fuse on the +12 V solenoid branch.** A MOSFET that fails *shorted*
+  leaves the coil permanently energised, and a coil rated for 60 ms pulses will cook.
+  This is the fire protection, not a nicety.
+- **18–20 AWG wire for the solenoid leg.** It carries several amps; thin jumper wire
+  heats up and drops enough voltage to weaken the kick.
+- **Perfboard and soldered joints, or screw terminals. Do NOT breadboard this.**
+  Breadboard contacts are rated for a few hundred milliamps — at solenoid current they
+  heat, arc, and melt the board.
+
+The solenoid taps the **raw battery** like the motor drivers, not the buck converter.
+
+```
+battery + ──[5 A fuse]──┬────────────┬──────────┐
+                        │            │          │
+                    [1000 µF]     [coil]     [diode]  band ^ to +12 V
+                        │            │          │
+                        │            +----------+
+                        │            │
+                        │          drain
+   GPIO 27 ──[220 ohm]────────────- gate   IRLZ44N
+                        │       │  source
+                     [10 kohm]--+    │
+                        │            │
+battery - ──────────────+------------+---- common with Pi GND
+```
+
+Pick a **12 V push-pull solenoid rated for intermittent duty**, not continuous. Check
+its stroke (~10 mm is typical) and remember the whole assembly lives inside the 70 mm
+forward allowance and the 2.50 kg limit. On a 2S pack (7.4 V) a 12 V solenoid kicks
+weakly and no wiring fixes that — you want 3S.
 
 `bot.py` fires it for 60 ms with a 2.2 s cooldown, which respects rule 5.4.
 
@@ -205,7 +236,7 @@ camera, 18650 box.
 | BNO055 | heading that doesn't drift; the real upgrade | 300–500 |
 | VL53L0X or HC-SR04 | wall back-off, keeps you legal under 10.1 | 40–150 |
 | Rocker kill switch | **required** by 4.5 | ~20 |
-| IRLZ44N + 1N5408 + caps | kicker driver | ~60 |
+| IRLZ44N + 1N5408 + 1000 µF + 5 A fuse | kicker driver, if you build one | ~100 |
 | 3 mm PVC or aluminium sheet | plow and wings | ~100 |
 | Rubber O-rings for rollers | the green field is slippery | ~50 |
 
