@@ -27,8 +27,11 @@ SONAR_PINS = (17, 22)  # HC-SR04 (echo, trigger); set None if you didn't fit one
 
 # --- everything worth changing trackside lives in tune.json
 DEFAULTS = {
-    "hsv_lo": [5, 120, 110], "hsv_hi": [25, 255, 255],  # rule 12.5: orange/yellow ball,
-                             # green floor. Widen H to ~35 if the ball on the day is yellow.
+    # Measured off the ball photos: hue sits in a tight 38-42 band, but WHITE TILE IS
+    # WHAT WE ACTUALLY PLAY ON, and white has no hue - it just has low saturation
+    # (floor p98 = 119, ball p2 = 156). So S_lo is the wall that keeps the floor out;
+    # H is widened past the measurement to survive the venue's white balance.
+    "hsv_lo": [32, 140, 80], "hsv_hi": [50, 255, 255],
     "min_area": 60,          # px, ignore specks
     "min_round": 0.72,       # blob area / enclosing-circle area. Ball ~.85, chassis way under.
                              # Raise it if we chase the rival, lower it if we ignore the ball.

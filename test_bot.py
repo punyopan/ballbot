@@ -106,16 +106,17 @@ def test_gyro():
 
 
 def test_find_ball_ignores_a_same_coloured_rival():
-    """Rule 2.3 puts blue/yellow markers on every robot and 12.5 makes the ball
-    orange OR yellow - so a yellow ball and a yellow-side rival share a hue. The
-    rival is always bigger, so 'largest blob of ball colour' drives us into it.
-    Only the round one counts."""
+    """The venue is white tile and the ball is green, so a rival in the ball's own
+    green is the case to survive. It is always BIGGER than the ball, so picking the
+    largest blob of ball colour drives us into it. Only the round one counts.
+    (Colours here are the medians measured off the real ball photos.)"""
     import cv2, numpy as np
     from bot import find_ball
-    BALL = (30, 130, 240)                       # BGR orange, inside the default window
+    BALL = (18, 200, 139)                       # BGR of HSV(40,232,200), the measured ball
 
     def frame_with(*shapes):
-        f = np.full((240, 320, 3), (70, 140, 70), np.uint8)   # rule 3.1: green floor
+        f = np.full((240, 320, 3), 205, np.uint8)         # bare white tile
+        cv2.line(f, (60, 0), (60, 240), (120, 120, 120), 3)   # a grout line to ignore
         for s in shapes:
             s(f)
         return f
