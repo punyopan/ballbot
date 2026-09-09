@@ -27,8 +27,10 @@ SONAR_PINS = (17, 22)  # HC-SR04 (echo, trigger); set None if you didn't fit one
 
 # --- everything worth changing trackside lives in tune.json
 DEFAULTS = {
-    "hsv_lo": [5, 120, 110], "hsv_hi": [25, 255, 255],  # orange ball on green floor
+    "hsv_lo": [35, 90, 90], "hsv_hi": [85, 255, 255],   # lime ball; calibrate.py refines
     "min_area": 60,          # px, ignore specks
+    "min_round": 0.72,       # blob area / enclosing-circle area. Ball ~.85, chassis way under.
+                             # Raise it if we chase the rival, lower it if we ignore the ball.
     "close_radius": 34,      # ball radius in px that means "we are on it"
     "speed": 0.75,           # base power 0..1
     "strafe_gain": 1.2,      # how hard we slide sideways onto the ball
@@ -250,12 +252,24 @@ def find_ball(frame):
     mask = cv2.inRange(hsv, np.array(TUNE["hsv_lo"]), np.array(TUNE["hsv_hi"]))
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not cnts:
+    # A rival can be painted the ball's own green, and it is BIGGER than the ball -
+    # so taking the largest green blob drives us straight into it. Only a ball fills
+    # its own enclosing circle (a chassis, a sticker, or a ball merged with the robot
+    # touching it all sit well under min_round), so screen on roundness FIRST and
+    # take the largest survivor. Nothing round in frame -> we search, we don't charge.
+    best = None
+    for c in cnts:
+        a = cv2.contourArea(c)
+        if a < TUNE["min_area"]:
+            continue
+        (x, _y), r = cv2.minEnclosingCircle(c)
+        if r < 1 or a / (math.pi * r * r) < TUNE["min_round"]:
+            continue
+        if best is None or a > best[0]:
+            best = (a, x, r)
+    if best is None:
         return None
-    c = max(cnts, key=cv2.contourArea)
-    if cv2.contourArea(c) < TUNE["min_area"]:
-        return None
-    (x, _y), r = cv2.minEnclosingCircle(c)
+    _a, x, r = best
     return (x / (frame.shape[1] / 2) - 1.0, r)
 
 

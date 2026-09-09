@@ -13,6 +13,9 @@ for i, name in enumerate(("H lo", "S lo", "V lo")):
     cv2.createTrackbar(name, W, bot.TUNE["hsv_lo"][i], 255, lambda _: None)
 for i, name in enumerate(("H hi", "S hi", "V hi")):
     cv2.createTrackbar(name, W, bot.TUNE["hsv_hi"][i], 255, lambda _: None)
+# Roundness is what keeps us off a rival wearing the ball's colour. Point the camera
+# at the RIVAL and raise this until the circle stops locking on to it.
+cv2.createTrackbar("round%", W, int(bot.TUNE["min_round"] * 100), 100, lambda _: None)
 
 grab = bot.open_camera()
 while True:
@@ -21,6 +24,7 @@ while True:
         continue
     bot.TUNE["hsv_lo"] = [cv2.getTrackbarPos(n, W) for n in ("H lo", "S lo", "V lo")]
     bot.TUNE["hsv_hi"] = [cv2.getTrackbarPos(n, W) for n in ("H hi", "S hi", "V hi")]
+    bot.TUNE["min_round"] = cv2.getTrackbarPos("round%", W) / 100.0
     found = bot.find_ball(frame)
     if found:
         dx, r = found
