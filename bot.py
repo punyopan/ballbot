@@ -22,7 +22,7 @@ DRY = "--dry" in sys.argv
 # --- pins (BCM). Motor = (forward, backward, enable/pwm). Match your driver board.
 MOTORS = {"FL": (5, 6, 12), "FR": (13, 19, 18), "BL": (16, 20, 21), "BR": (23, 24, 25)}
 BUTTON_PIN = 4
-KICKER_PIN = 27        # solenoid MOSFET gate; set None if you didn't fit one
+KICKER_PIN = None      # no kicker fitted - we push the ball in. Set to a GPIO if you add one.
 SONAR_PINS = (17, 22)  # HC-SR04 (echo, trigger); set None if you didn't fit one
 
 # --- everything worth changing trackside lives in tune.json
