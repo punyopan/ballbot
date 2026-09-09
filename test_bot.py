@@ -105,39 +105,41 @@ def test_gyro():
 
 
 
-def test_find_ball_ignores_a_green_rival():
-    """The rival can be the ball's colour and is always bigger, so 'largest green
-    blob' would drive us into it. Only the round one counts."""
+def test_find_ball_ignores_a_same_coloured_rival():
+    """Rule 2.3 puts blue/yellow markers on every robot and 12.5 makes the ball
+    orange OR yellow - so a yellow ball and a yellow-side rival share a hue. The
+    rival is always bigger, so 'largest blob of ball colour' drives us into it.
+    Only the round one counts."""
     import cv2, numpy as np
     from bot import find_ball
-    GREEN = (60, 200, 60)                       # BGR, inside the default hsv window
+    BALL = (30, 130, 240)                       # BGR orange, inside the default window
 
     def frame_with(*shapes):
-        f = np.full((240, 320, 3), 200, np.uint8)   # pale floor
+        f = np.full((240, 320, 3), (70, 140, 70), np.uint8)   # rule 3.1: green floor
         for s in shapes:
             s(f)
         return f
 
-    ball_left = lambda f: cv2.circle(f, (80, 120), 20, GREEN, -1)
-    ball_right = lambda f: cv2.circle(f, (240, 120), 20, GREEN, -1)
-    rival = lambda f: cv2.rectangle(f, (180, 60), (300, 180), GREEN, -1)   # far bigger
+    ball_left = lambda f: cv2.circle(f, (80, 120), 20, BALL, -1)
+    ball_right = lambda f: cv2.circle(f, (240, 120), 20, BALL, -1)
+    rival = lambda f: cv2.rectangle(f, (180, 60), (300, 180), BALL, -1)   # far bigger
 
     dx, r = find_ball(frame_with(ball_left))
     assert dx < -0.4 and 15 < r < 25, "a lone ball is still found: %s" % ((dx, r),)
 
-    assert find_ball(frame_with(rival)) is None, "a green chassis is not a ball"
+    assert find_ball(frame_with(rival)) is None, "a same-coloured chassis is not a ball"
 
     dx, _r = find_ball(frame_with(ball_left, rival))
     assert dx < -0.4, "picked the bigger rival over the ball, dx=%.2f" % dx
 
     # Two balls, unequal: still the largest ROUND one, so distance logic is intact.
-    big = lambda f: cv2.circle(f, (240, 120), 34, GREEN, -1)
+    big = lambda f: cv2.circle(f, (240, 120), 34, BALL, -1)
     dx, r = find_ball(frame_with(ball_left, big))
     assert dx > 0.4 and r > 30, "should prefer the nearer/bigger ball: %s" % ((dx, r),)
 
 
 for fn in (test_mix, test_angle_diff, test_decide, test_ball_memory, test_blind, test_should_escape, test_gyro,
-           test_find_ball_ignores_a_green_rival):
+           test_find_ball_ignores_a_same_coloured_rival):
     fn()
     print("ok", fn.__name__)
 print("all good")

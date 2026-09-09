@@ -27,7 +27,8 @@ SONAR_PINS = (17, 22)  # HC-SR04 (echo, trigger); set None if you didn't fit one
 
 # --- everything worth changing trackside lives in tune.json
 DEFAULTS = {
-    "hsv_lo": [35, 90, 90], "hsv_hi": [85, 255, 255],   # lime ball; calibrate.py refines
+    "hsv_lo": [5, 120, 110], "hsv_hi": [25, 255, 255],  # rule 12.5: orange/yellow ball,
+                             # green floor. Widen H to ~35 if the ball on the day is yellow.
     "min_area": 60,          # px, ignore specks
     "min_round": 0.72,       # blob area / enclosing-circle area. Ball ~.85, chassis way under.
                              # Raise it if we chase the rival, lower it if we ignore the ball.
