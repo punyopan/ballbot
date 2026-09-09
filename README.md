@@ -10,6 +10,7 @@ motor driver board, 18650 battery box. Everything below is legal modification.
 | `bot.py` | the whole robot: vision → strategy → mecanum drive |
 | `calibrate.py` | slider tool to lock the ball colour on the real field → `tune.json` |
 | `test_bot.py` | self-check for the driving maths and the strategy, runs on a laptop |
+| `test_canitrun.py` | short movement check: forward, backward, strafe, and turn; no camera needed |
 | `tune.json` | written by calibrate; every number you'd want to change at the venue |
 | `ballbot.service` | starts `bot.py` at power-on, because rule 9.1.3 bans laptops at the field |
 | `HARDWARE.md` | pinout, power, wiring, shopping list |
@@ -76,6 +77,14 @@ python3 bot.py --dry    # prints motor commands instead of driving
 ```
 
 ## Bring-up order, once it's on the Pi
+
+For a short movement check, raise the robot so the wheels hang free and run
+`python3 test_canitrun.py`. Press and release the start button to begin.
+It runs six moves at 40% power, then stops automatically. Press the button again
+or Ctrl-C to stop early. Adjust with `--speed 0.3 --seconds 2` if needed.
+Watch the wheels to confirm each printed direction; completion alone does not
+prove the motors moved. On a laptop, use `python test_canitrun.py --dry` to
+check command generation without GPIO or a camera.
 
 Do these in order. Each one assumes the last passed.
 
