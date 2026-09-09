@@ -93,12 +93,22 @@ def test_gyro():
     assert gyro_step(10.0, 5.0, 1.0, sign=-1) == 15.0, "imu_sign flips a bad mounting"
     assert gyro_step(90.0, 0.0, 10.0) == 90.0, "sitting still never drifts the maths"
 
+    import time as _t
+
     class FakeBus:  # a gyro that reads a steady +2 deg/s of real rotation off zero bias
+        born, first_read = _t.time(), None
+
         def read_i2c_block_data(self, addr, reg, n):
+            if self.first_read is None:
+                FakeBus.first_read = _t.time() - self.born
             return [1, 6]  # 262 raw = 2.0 deg/s at 131 LSB per deg/s
 
     g = Gyro(bus=FakeBus())
     assert abs(g.bias - 262.0) < 1e-6, "bias calibration soaks up a constant offset"
+    # The settle has to come BEFORE the first read, or it is decoration: the whole
+    # point is that no sample is taken while the button shove is still ringing.
+    assert g.bus.first_read >= TUNE["gyro_settle"],         "sampled %.2fs after zero() began, settle is %.2fs" % (
+            g.bus.first_read, TUNE["gyro_settle"])
     g.t -= 1.0
     assert abs(g.heading() - 0.0) < 1e-6, "so the same reading now means 'not turning'"
 

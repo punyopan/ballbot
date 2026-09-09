@@ -49,6 +49,7 @@ DEFAULTS = {
     "blind_std": 12,         # frame contrast below this = lens covered
     "blind_frames": 15,      # ~0.5 s of that before we believe it
     "imu_sign": 1,           # flip to -1 if the MPU-6050 is mounted upside down
+    "gyro_settle": 0.3,      # s to let the button shove die out before sampling bias
     "ball_memory": 25,       # frames to keep pushing after the plow hides the ball
     "motion_min": 2.5,       # frame-to-frame pixel change below this = we aren't moving
     "stuck_secs": 2.5,       # how long that has to hold before we thrash free
@@ -152,6 +153,11 @@ class Gyro:
         at boot: systemd starts us while the robot is still being carried to the field,
         and a bias measured while moving poisons the heading for the whole match."""
         print("calibrating gyro - keep the robot COMPLETELY still")
+        # The button press is a physical shove, and this runs the instant your finger
+        # leaves it. 200 reads take ~0.1 s, so without this the robot is still rocking
+        # through the whole sample and the wobble averages straight into the bias -
+        # which then drifts the heading for the entire segment, silently.
+        time.sleep(TUNE["gyro_settle"])
         self.bias = sum(self._raw() for _ in range(200)) / 200.0
         self.h, self.t = 0.0, time.time()
 
