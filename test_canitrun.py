@@ -48,10 +48,10 @@ def main(argv=None):
             print("DRY RUN: no hardware is tested.", flush=True)
         else:
             print("Raise the robot so all wheels are off the ground.", flush=True)
-            print("Press and release START to begin; press again or Ctrl-C to stop.", flush=True)
-            if robot.button:
-                robot.button.wait_for_press()
-                robot.button.wait_for_release()
+            print("Starting in 3 seconds; press START or Ctrl-C to stop.", flush=True)
+            if not wait_or_stop(robot, 3):
+                print("Stopped by start button.")
+                return
         for label, vx, vy, turn in MOVES:
             if robot.button and robot.button.is_pressed:
                 print("Stopped by start button.")

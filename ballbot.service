@@ -14,9 +14,9 @@ After=multi-user.target
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/home/pi/ballbot
-ExecStart=/usr/bin/python3 /home/pi/ballbot/bot.py
+User=sonion67
+WorkingDirectory=/home/sonion67/kaopunm.5/ball_bot/ballbot
+ExecStart=/home/sonion67/miniforge3/envs/handenv/bin/python3 /home/sonion67/kaopunm.5/ball_bot/ballbot/bot.py
 Restart=always
 RestartSec=3
 

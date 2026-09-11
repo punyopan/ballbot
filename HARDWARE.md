@@ -4,12 +4,32 @@ The pin numbers here match the top of `bot.py` exactly. Change one, change both.
 
 ## Pinout (BCM numbering)
 
-| GPIO | Goes to | Notes |
-|---|---|---|
-| 5, 6, 12 | Motor FL — IN1, IN2, ENA | 12 is hardware-PWM capable |
-| 13, 19, 18 | Motor FR — IN1, IN2, ENB | 18 is hardware-PWM capable |
-| 16, 20, 21 | Motor BL — IN1, IN2, ENA | |
-| 23, 24, 25 | Motor BR — IN1, IN2, ENB | |
+**Two L298N boards, one motor per wheel — four independent channels.**
+
+*Board 1 — front:*
+
+| GPIO | L298N pin | Goes to | Notes |
+|---|---|---|---|
+| 5, 6 | IN1, IN2 | Motor **FL** | |
+| 12 | **ENA** | gates OUT1/OUT2 = FL | hardware-PWM capable |
+| 13, 19 | IN3, IN4 | Motor **FR** | |
+| 18 | **ENB** | gates OUT3/OUT4 = FR | hardware-PWM capable |
+
+*Board 2 — rear:*
+
+| GPIO | L298N pin | Goes to | Notes |
+|---|---|---|---|
+| 16, 20 | IN1, IN2 | Motor **BL** | |
+| 21 | **ENA** | gates OUT1/OUT2 = BL | |
+| 23, 24 | IN3, IN4 | Motor **BR** | |
+| 25 | **ENB** | gates OUT3/OUT4 = BR | |
+
+**Enable needs no jumper cap.** A cap just ties enable to 5 V; a GPIO does the same
+job and adds speed control. If caps are fitted, pull them — they short enable to 5 V
+and fight the pin driving it. Short of wire, a dupont lead from the enable header to
+the board's own 5 V pin substitutes for a missing cap (full speed, no PWM on that
+channel). If you ever run only two channels, put two entries in `MOTORS` and
+`Robot.drive()` falls back to `tank()` by itself.
 | 4 | Start button | other side to GND, `gpiozero` pulls it up internally |
 | 27 | Kicker MOSFET gate | through a 220 Ω resistor; omit if you skip the kicker |
 | 17, 22 | HC-SR04 echo, trigger | **echo needs a divider — see below** |

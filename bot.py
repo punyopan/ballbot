@@ -5,6 +5,7 @@
   python3 bot.py --check  prove numpy/cv2/camera/IMU work on this board
   python3 bot.py --wheels bring-up: wheel directions, WHEELS OFF THE GROUND
   python3 bot.py --dry    no motors, prints what it would do (test on a laptop)
+  python3 bot.py --nobutton  no start button fitted: count down and go
   python3 calibrate.py   tune the ball colour at the venue -> tune.json
 
 Rules this code is built around:
@@ -18,9 +19,30 @@ import json, math, os, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DRY = "--dry" in sys.argv
+# Rule 2.2 wants a real momentary button on the robot and you fail inspection without
+# one. This is for bench runs before it's fitted: it counts down instead of waiting.
+# A toggle switch on GPIO 4 does NOT need this - flip it on then off and the normal
+# press/release path starts you; leaving it on is what this flag is here to survive.
+NOBUTTON = "--nobutton" in sys.argv
+START_COUNTDOWN = 5   # seconds, long enough to get your hands clear
 
 # --- pins (BCM). Motor = (forward, backward, enable/pwm). Match your driver board.
+# TWO L298N boards, one motor per mecanum wheel, so all four turn independently -
+# which is the whole point: strafing needs an X pattern, and ganged wheels can't make
+# one. Board 1 carries FL+FR, board 2 carries BL+BR.
+#
+# On each board ENA gates OUT1/OUT2 (the IN1/IN2 pair) and ENB gates OUT3/OUT4
+# (IN3/IN4). Enable is an active-high gate on the H-bridge: the IN pins only choose a
+# direction, they pass no current of their own, so an undriven enable means the wheels
+# sit dead while every IN pin measures exactly right. Name the enable pin here.
+#
+# Never write None in the third slot for a pin that is actually wired - that tells
+# gpiozero to leave it floating, the gate reads low, and nothing turns. None is only
+# for a board whose enable is jumpered to 5 V and has no wire to the Pi at all.
 MOTORS = {"FL": (5, 6, 12), "FR": (13, 19, 18), "BL": (16, 20, 21), "BR": (23, 24, 25)}
+# Only two channels wired? Use two entries and drive() falls back to tank() on its own:
+# MOTORS = {"L": (19, 13, 12), "R": (6, 5, 18)}
+TANK = len(MOTORS) == 2      # drop to differential drive when only two channels exist
 BUTTON_PIN = 4
 KICKER_PIN = None      # no kicker fitted - we push the ball in. Set to a GPIO if you add one.
 SONAR_PINS = (17, 22)  # HC-SR04 (echo, trigger); set None if you didn't fit one
@@ -68,6 +90,17 @@ def mix(vx, vy, w):
     fl, fr, bl, br = vx - vy - w, vx + vy + w, vx + vy - w, vx - vy + w
     m = max(1.0, abs(fl), abs(fr), abs(bl), abs(br))
     return fl / m, fr / m, bl / m, br / m
+
+
+def tank(vx, w):
+    """Differential mixer for two ganged channels -> (left, right).
+
+    There is no vy: two channels cannot strafe, so the caller drops it. Turning is
+    the only way this chassis corrects a sideways ball error, which is why decide()'s
+    strafe term has to be folded into the turn when TANK is set."""
+    l, r = vx - w, vx + w
+    m = max(1.0, abs(l), abs(r))
+    return l / m, r / m
 
 
 def angle_diff(target, current):
@@ -184,8 +217,17 @@ class Robot:
         if DRY:
             return
         from gpiozero import Motor, Button, OutputDevice
-        self.motors = [Motor(f, b, enable=e, pwm=True) for f, b, e in
-                       (MOTORS["FL"], MOTORS["FR"], MOTORS["BL"], MOTORS["BR"])]
+        # enable=None means the board's enable is jumpered to 5 V and no wire reaches
+        # the Pi. Say so out loud: if a wire IS there, this is the silent failure where
+        # the IN pins read perfect on a meter and the wheels never move.
+        self.motors = []
+        for name, (f, b, e) in MOTORS.items():
+            if e is None:
+                print("%s: enable not driven - correct ONLY if ENA/ENB is jumpered to 5 V"
+                      % name)
+                self.motors.append(Motor(f, b, pwm=True))
+            else:
+                self.motors.append(Motor(f, b, enable=e, pwm=True))
         self.button = Button(BUTTON_PIN)
         if KICKER_PIN is not None:
             self.kicker = OutputDevice(KICKER_PIN)
@@ -210,7 +252,14 @@ class Robot:
     def drive(self, vx, vy, w):
         vy *= TUNE["invert_strafe"]
         w *= TUNE["invert_turn"]
-        vals = mix(vx, vy, w)
+        if TANK:
+            # Two ganged channels cannot strafe. Rather than throw the sideways
+            # command away and creep past the ball, spend it as extra turn - the only
+            # authority this chassis has over a left/right error.
+            w = clamp(w + vy * TUNE["strafe_gain"] * 0.5)
+            vals = tank(vx, w)
+        else:
+            vals = mix(vx, vy, w)
         if DRY:
             print("vx%+.2f vy%+.2f w%+.2f -> %s" %
                   (vx, vy, w, " ".join("%+.2f" % v for v in vals)))
@@ -288,7 +337,9 @@ def play(bot, grab, goal_heading, t_end):
     import numpy as np
     st, last_kick, stuck_since, prev = {"spin": 1}, 0.0, time.time(), None
     while time.time() < t_end:
-        if bot.button and bot.button.is_pressed:     # second press = stop
+        # A toggle switch left in the ON position reads as "pressed" forever, which
+        # would break out on frame one - so --nobutton ignores the stop check too.
+        if bot.button and not NOBUTTON and bot.button.is_pressed:   # second press = stop
             break
         frame = grab()
         st["blind"] = st.get("blind", 0) + 1 if is_blind(frame) else 0
@@ -393,9 +444,14 @@ def main():
     left = 12 * 60
     try:
         while left > 0:
-            print("point the robot at the ENEMY goal, then press start")
-            if bot.button:
+            if bot.button and not NOBUTTON:
+                print("point the robot at the ENEMY goal, then press start")
                 bot.button.wait_for_press(); bot.button.wait_for_release()
+            else:
+                print("point the robot at the ENEMY goal and stand clear")
+                for n in range(START_COUNTDOWN, 0, -1):
+                    print("  %d..." % n, flush=True)
+                    time.sleep(1)
             bot.zero_heading()      # robot is placed and still now; boot time was not
             goal_heading = bot.heading()
             print("go. %.0f s left, goal heading = %s" % (left, goal_heading))

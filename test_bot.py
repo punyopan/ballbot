@@ -2,7 +2,7 @@
 """Self-check for the driving maths and the strategy. Run: python3 test_bot.py"""
 import sys
 sys.argv.append("--dry")
-from bot import mix, angle_diff, decide, gyro_step, should_escape, Gyro, TUNE
+from bot import mix, tank, angle_diff, decide, gyro_step, should_escape, Gyro, TUNE
 
 
 def approx(a, b, tol=1e-6):
@@ -16,6 +16,17 @@ def test_mix():
     assert approx(mix(0, 0, 1), (-1, 1, -1, 1)), "CCW = left side back, right side fwd"
     assert max(abs(v) for v in mix(1, 1, 1)) <= 1.0, "must stay inside motor range"
     assert approx(mix(0.5, 0, 0), (0.5, 0.5, 0.5, 0.5)), "small commands are not normalised up"
+
+
+def test_tank():
+    assert approx(tank(1, 0), (1, 1)), "forward = both sides forward"
+    assert approx(tank(-1, 0), (-1, -1))
+    assert approx(tank(0, 1), (-1, 1)), "CCW = left side back, right side fwd"
+    assert approx(tank(0.5, 0), (0.5, 0.5)), "small commands are not normalised up"
+    assert max(abs(v) for v in tank(1, 1)) <= 1.0, "must stay inside motor range"
+    # Same sign convention as the four-wheel mixer, so decide() needs no special case.
+    assert approx(tank(1, 0), mix(1, 0, 0)[:2]), "agrees with mix on straight forward"
+    assert approx(tank(0, 1), mix(0, 0, 1)[:2]), "agrees with mix on spin"
 
 
 def test_angle_diff():
@@ -149,7 +160,7 @@ def test_find_ball_ignores_a_same_coloured_rival():
     assert dx > 0.4 and r > 30, "should prefer the nearer/bigger ball: %s" % ((dx, r),)
 
 
-for fn in (test_mix, test_angle_diff, test_decide, test_ball_memory, test_blind, test_should_escape, test_gyro,
+for fn in (test_mix, test_tank, test_angle_diff, test_decide, test_ball_memory, test_blind, test_should_escape, test_gyro,
            test_find_ball_ignores_a_same_coloured_rival):
     fn()
     print("ok", fn.__name__)
