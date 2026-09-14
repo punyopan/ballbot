@@ -197,9 +197,10 @@ weakly and no wiring fixes that — you want 3S.
 where you can reach it without leaning over the field, and where you won't hit it by
 accident — a second press stops the robot.
 
-*Check it* — run `python3 bot.py`. It waits at "point the robot at the ENEMY goal,
-then press start" and only moves once you press. If it starts on its own, the button
-is wired to 3.3 V instead of GND.
+*Check it* — run `python3 bot.py --button`. It waits at "point the robot at the ENEMY
+goal, then press start" and only moves once you press. If it starts on its own, the
+button is wired to 3.3 V instead of GND. Plain `python3 bot.py` counts down and goes
+without ever reading the button, so it proves nothing about this wiring.
 
 **Camera.** *Check it* — `python3 bot.py --check` prints the frame size and a contrast
 number. `NO FRAME` means the camera isn't detected at all; `BLIND` means it sees

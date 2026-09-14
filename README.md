@@ -7,7 +7,7 @@ motor driver board, 18650 battery box. Everything below is legal modification.
 
 | file | what it is |
 |---|---|
-| `bot.py` | the whole robot: vision → strategy → mecanum drive |
+| `bot.py` | the whole robot: vision → strategy → mecanum drive. `--button` to start on a press, `--stream` to watch from a laptop |
 | `calibrate.py` | slider tool to lock the ball colour on the real field → `tune.json` |
 | `test_bot.py` | self-check for the driving maths and the strategy, runs on a laptop |
 | `drive.py` | drive the chassis by hand: forward, strafe, spin; also `--pins` to probe wiring |
@@ -89,6 +89,22 @@ wheel values without GPIO or a camera.
 If nothing happens at all, run `python3 checkrun.py` — it walks the whole stack and
 prints a FIX line for whatever is wrong, without driving a motor.
 
+## Watching it from a laptop
+
+`python3 bot.py --stream` serves the camera with the robot's own decisions drawn on
+top — magenta for the ball it found, a green arrow for where it is driving, and the
+heading, goal error and wheel command along the top. Open `http://<pi-address>:8000/`
+in a browser on the same network; the Pi prints the full URL at startup. `--stream
+8080` picks another port.
+
+This is the fastest way to find out *why* it drove past the ball, and it works while
+you are ssh'd in with no screen on the robot. It costs nothing when no browser is
+connected — with nobody watching it never even encodes a frame — and it caps itself
+at 10 fps so the match loop keeps its timing.
+
+**Turn it off at the venue.** Rule 2.2 bans wifi during a match, which is why it is
+opt-in and why `ballbot.service` does not pass it.
+
 Do these in order. Each one assumes the last passed.
 
 ```bash
@@ -138,7 +154,7 @@ So: open front, ball always able to roll out. All the code assumes this.
 
 1. **BNO055 IMU (~350฿)** — the single biggest upgrade. Mecanum wheels drift; without
    a compass the robot has no idea which goal is which. At start you aim the robot
-   at the enemy goal and press the button — that heading is remembered for 12 minutes.
+   at the enemy goal to start — that heading is remembered for 12 minutes.
    `bot.py` already reads it and orbits the ball until the nose points at the goal.
    No IMU → the code still works, it just chases the ball blindly.
    **Already own an MPU-6050?** It works — `bot.py` falls back to it automatically

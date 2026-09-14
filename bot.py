@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Ball-touch robot: 100% autonomous, Raspberry Pi 4 + 4x mecanum + top camera.
 
-  python3 bot.py         run for real (press the start button once)
+  python3 bot.py         run: count down 5 s, then go
+  python3 bot.py --button wait for the start button instead (rule 2.2 - use at the venue)
+  python3 bot.py --stream watch the camera from a laptop: http://<pi>:8000/
   python3 bot.py --check  prove numpy/cv2/camera/IMU work on this board
   python3 bot.py --wheels bring-up: wheel directions, WHEELS OFF THE GROUND
   python3 bot.py --dry    no motors, prints what it would do (test on a laptop)
-  python3 bot.py --nobutton  no start button fitted: count down and go
   python3 calibrate.py   tune the ball colour at the venue -> tune.json
 
 Rules this code is built around:
@@ -15,16 +16,34 @@ Rules this code is built around:
   10.1 pinning another robot on the wall is a foul -> back off when close
   12.3 don't park in front of your own goal -> the retreat is capped
 """
-import json, math, os, sys, time
+import json, math, os, sys, threading, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DRY = "--dry" in sys.argv
-# Rule 2.2 wants a real momentary button on the robot and you fail inspection without
-# one. This is for bench runs before it's fitted: it counts down instead of waiting.
-# A toggle switch on GPIO 4 does NOT need this - flip it on then off and the normal
-# press/release path starts you; leaving it on is what this flag is here to survive.
-NOBUTTON = "--nobutton" in sys.argv
+
+
+def argval(flag, default=None):
+    """Value after `flag`, or default. `--stream 8080` -> "8080"."""
+    if flag in sys.argv:
+        i = sys.argv.index(flag)
+        if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("-"):
+            return sys.argv[i + 1]
+    return default
+
+
+# Counting down is the default because that is how the robot is run on the bench and
+# over ssh, where there is nobody standing at the robot to press anything.
+#
+# AT THE VENUE, PASS --button. Rule 2.2 requires one physical press to start and you
+# fail inspection without it; ballbot.service passes it for exactly that reason. A
+# toggle switch on GPIO 4 works with --button too - flip it on, then off - but leaving
+# it on reads as "pressed" forever, which is what the countdown path is here to escape.
+NOBUTTON = "--button" not in sys.argv
 START_COUNTDOWN = 5   # seconds, long enough to get your hands clear
+# Rule 2.2 also bans wifi during a match, so the video stream is opt-in and never runs
+# unless you ask for it. Bench and practice only.
+STREAM = "--stream" in sys.argv
+STREAM_PORT = int(argval("--stream", 8000))
 
 # --- pins (BCM). Motor = (forward, backward, enable/pwm). Match your driver board.
 # TWO L298N boards, one motor per mecanum wheel, so all four turn independently -
@@ -294,8 +313,195 @@ def find_ball(frame):
     return (x / (frame.shape[1] / 2) - 1.0, r)
 
 
+# ---------------------------------------------------------------- streaming
+PAGE = b"""<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
+<title>ballbot</title>
+<style>body{margin:0;background:#111;color:#bbb;font:13px system-ui;text-align:center}
+img{width:640px;max-width:100%;image-rendering:pixelated;background:#000}</style>
+<p>magenta circle = the ball it found &middot; green arrow = where it is driving
+<br><img src="/stream.mjpg">
+"""
+
+
+def lan_ip():
+    """The address a laptop on the same network would use to reach this Pi."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))   # a UDP connect sends nothing, it just picks a route
+        return s.getsockname()[0]
+    except Exception:
+        return "<pi-address>"
+    finally:
+        s.close()
+
+
+def annotate(frame, ball, drive, status):
+    """Draw what the robot decided on top of what it saw.
+
+    The point of watching over the network is to see the DECISION, not the picture -
+    a raw feed tells you nothing about why it drove past the ball."""
+    import cv2
+    f = frame.copy()
+    hgt, wid = f.shape[:2]
+    if ball is not None:
+        dx, r = ball
+        cx = int((dx + 1.0) * wid / 2.0)
+        # find_ball keeps only dx and the radius and throws the height away, so the
+        # circle has to be parked on the middle line - its x and size are measured,
+        # its height is not. The full-height line is the part that is actually true,
+        # and it is what you compare against the arrow to see if the robot is aiming.
+        cv2.line(f, (cx, 0), (cx, hgt), (255, 0, 255), 1)
+        cv2.circle(f, (cx, hgt // 2), max(3, int(r)), (255, 0, 255), 2)
+    if drive is not None:
+        vx, vy, turn = drive
+        ox, oy = wid // 2, hgt - 10
+        # vy is +left and screen x grows rightward, so the arrow's x is negated.
+        cv2.arrowedLine(f, (ox, oy), (ox - int(vy * 55), oy - int(vx * 55)),
+                        (0, 255, 0), 2, tipLength=0.3)
+        if abs(turn) > 0.05:
+            # A spin has no direction to point on screen, so it has to be written out.
+            cv2.putText(f, "turn %+.2f" % turn, (ox + 34, oy - 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+    if status:
+        cv2.rectangle(f, (0, 0), (wid, 13 * len(status) + 4), (0, 0, 0), -1)
+        for i, line in enumerate(status):
+            cv2.putText(f, line, (4, 13 * i + 13), cv2.FONT_HERSHEY_SIMPLEX, 0.36,
+                        (255, 255, 255), 1)
+    return f
+
+
+class Streamer:
+    """MJPEG over HTTP, so you can watch from a laptop while the robot runs itself.
+
+    RULE 2.2 BANS WIFI IN A MATCH. This is a bench and practice tool: --stream turns
+    it on, and nothing starts unless you ask.
+
+    The match loop must never wait on a browser, so offer() drops the newest frame
+    into a slot and returns; the HTTP threads do all the waiting. With nobody
+    connected it does not even encode - no viewer, no cost.
+    """
+
+    BOUNDARY = b"ballbotframe"
+
+    def __init__(self, port=8000, quality=55, fps=10):
+        self.port, self.quality, self.min_dt = port, quality, 1.0 / fps
+        self.jpeg, self.seq, self.viewers, self.sent_at = None, 0, 0, 0.0
+        self.cond = threading.Condition()
+        self.server = None
+
+    def start(self):
+        from http.server import ThreadingHTTPServer
+        try:
+            self.server = ThreadingHTTPServer(("", self.port), _stream_handler(self))
+        except OSError as e:
+            # A stale bot.py still holding the port is the usual cause. Losing the
+            # video is not a reason to refuse to drive, so say so and carry on.
+            print("stream: port %d unavailable (%s) - running without it" % (self.port, e))
+            return self
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        print("stream: http://%s:%d/   (rule 2.2 bans wifi in a match - bench only)"
+              % (lan_ip(), self.port))
+        return self
+
+    def wants_frame(self):
+        """Cheap enough to call every pass of the loop, so the caller can skip
+        building status strings for a stream nobody is watching."""
+        return (self.server is not None and self.viewers > 0
+                and time.time() - self.sent_at >= self.min_dt)
+
+    def offer(self, frame, ball=None, drive=None, status=None):
+        if frame is None or not self.wants_frame():
+            return
+        self.sent_at = time.time()
+        try:
+            import cv2
+            ok, buf = cv2.imencode(".jpg", annotate(frame, ball, drive, status or []),
+                                   [cv2.IMWRITE_JPEG_QUALITY, self.quality])
+        except Exception as e:
+            print("stream: encode failed (%s)" % e)
+            return
+        if not ok:
+            return
+        with self.cond:
+            self.jpeg, self.seq = buf.tobytes(), self.seq + 1
+            self.cond.notify_all()
+
+    def wait_frame(self, seen, timeout=4.0):
+        """Block until there is a frame newer than `seen` -> (jpeg, seq), or None."""
+        with self.cond:
+            if self.seq == seen:
+                self.cond.wait(timeout)
+            return None if self.seq == seen else (self.jpeg, self.seq)
+
+    def _enter(self):
+        with self.cond:
+            self.viewers += 1
+
+    def _leave(self):
+        with self.cond:
+            self.viewers -= 1
+
+    def close(self):
+        if self.server:
+            self.server.shutdown()
+
+
+def _stream_handler(streamer):
+    from http.server import BaseHTTPRequestHandler
+
+    class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.0"
+
+        def log_message(self, *a):
+            pass            # the console is for the match, not for access logs
+
+        def do_GET(self):
+            if self.path.startswith("/stream"):
+                return self.mjpeg()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(PAGE)))
+            self.end_headers()
+            self.wfile.write(PAGE)
+
+        def mjpeg(self):
+            self.send_response(200)
+            self.send_header("Cache-Control", "no-store, private")
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=%s"
+                             % streamer.BOUNDARY.decode())
+            self.end_headers()
+            streamer._enter()
+            seen = 0
+            try:
+                while True:
+                    fresh = streamer.wait_frame(seen)
+                    if fresh is None:
+                        # Nothing new for seconds: the loop is between segments or
+                        # stopped. Re-send the last frame rather than sitting mute -
+                        # it holds the tab open, and the write is also how we find out
+                        # the laptop has gone, so we stop encoding for an empty room.
+                        if streamer.jpeg is None:
+                            continue
+                        jpeg = streamer.jpeg
+                    else:
+                        jpeg, seen = fresh
+                    self.wfile.write(b"--" + streamer.BOUNDARY + b"\r\n")
+                    self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                    self.wfile.write(b"Content-Length: %d\r\n\r\n" % len(jpeg))
+                    self.wfile.write(jpeg)
+                    self.wfile.write(b"\r\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass        # tab closed; normal
+            finally:
+                streamer._leave()
+
+    return Handler
+
+
 # ---------------------------------------------------------------- main
-def play(bot, grab, goal_heading, t_end):
+def play(bot, grab, goal_heading, t_end, stream=None):
     import numpy as np
     st, stuck_since, prev = {"spin": 1}, time.time(), None
     while time.time() < t_end:
@@ -312,6 +518,17 @@ def play(bot, grab, goal_heading, t_end):
         h = bot.heading()
         herr = None if (h is None or goal_heading is None) else -angle_diff(goal_heading, h)
         vx, vy, w = decide(ball, herr, st, blind)
+        if stream is not None and stream.wants_frame():
+            stream.offer(frame, ball, (vx, vy, w), [
+                "%4.0fs left   heading %s   goal err %s" % (
+                    max(0.0, t_end - time.time()),
+                    "--" if h is None else "%.0f" % h,
+                    "--" if herr is None else "%+.0f" % herr),
+                "ball %s   %s" % (
+                    "none" if ball is None else "dx%+.2f r%.0f" % ball,
+                    "BLIND" if blind else ""),
+                "vx%+.2f vy%+.2f w%+.2f" % (vx, vy, w),
+            ])
 
         now = time.time()
         small = None if frame is None else frame[::8, ::8].astype(np.int16)
@@ -401,6 +618,7 @@ def main():
         return wheeltest()
     bot = Robot()
     grab = open_camera()
+    stream = Streamer(STREAM_PORT).start() if STREAM else None
     left = 12 * 60
     try:
         while left > 0:
@@ -408,7 +626,8 @@ def main():
                 print("point the robot at the ENEMY goal, then press start")
                 bot.button.wait_for_press(); bot.button.wait_for_release()
             else:
-                print("point the robot at the ENEMY goal and stand clear")
+                print("point the robot at the ENEMY goal and stand clear"
+                      " (no button: Ctrl-C stops it)")
                 for n in range(START_COUNTDOWN, 0, -1):
                     print("  %d..." % n, flush=True)
                     time.sleep(1)
@@ -416,7 +635,7 @@ def main():
             goal_heading = bot.heading()
             print("go. %.0f s left, goal heading = %s" % (left, goal_heading))
             t0 = time.time()
-            play(bot, grab, goal_heading, t0 + (5 if DRY else left))
+            play(bot, grab, goal_heading, t0 + (5 if DRY else left), stream)
             left -= time.time() - t0   # 6.3: a goal stops the clock, it doesn't reset it
             print("stopped, %.0f s left" % max(left, 0))
             if DRY:
@@ -425,6 +644,8 @@ def main():
         pass
     finally:
         bot.stop()
+        if stream:
+            stream.close()
 
 
 if __name__ == "__main__":

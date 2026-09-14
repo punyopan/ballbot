@@ -1,5 +1,10 @@
 # Rule 9.1.3: no computer at the field, so bot.py must already be running when you
 # place the robot. This starts it at power-on; it then just waits for the button.
+#
+# --button is not optional here. bot.py counts down and drives off by default, which
+# is what you want over ssh on the bench and emphatically not what you want from a
+# unit that starts itself at power-on - the robot would launch on the carry to the
+# field. It is also rule 2.2: one physical press to start.
 # Restart=always means a crash mid-match costs you seconds, not the match.
 #
 #   sudo cp ballbot.service /etc/systemd/system/
@@ -16,7 +21,7 @@ After=multi-user.target
 Type=simple
 User=sonion67
 WorkingDirectory=/home/sonion67/kaopunm.5/ball_bot/ballbot
-ExecStart=/home/sonion67/miniforge3/envs/handenv/bin/python3 /home/sonion67/kaopunm.5/ball_bot/ballbot/bot.py
+ExecStart=/home/sonion67/miniforge3/envs/handenv/bin/python3 /home/sonion67/kaopunm.5/ball_bot/ballbot/bot.py --button
 Restart=always
 RestartSec=3
 

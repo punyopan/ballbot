@@ -127,10 +127,10 @@ def check_button():
         return
     try:
         # Held down at rest means it is wired to 3.3 V instead of GND, and bot.py
-        # would blow straight through wait_for_press and then stop on frame one.
+        # --button would blow straight through wait_for_press and stop on frame one.
         if b.is_pressed:
             say("bad", "button", "reads PRESSED while untouched",
-                "wire the other side to GND, not 3.3 V - or use: bot.py --nobutton")
+                "wire the other side to GND, not 3.3 V - plain bot.py counts down instead")
         else:
             print("       press the button now (3 s)...", flush=True)
             got = b.wait_for_press(timeout=3)
@@ -138,7 +138,8 @@ def check_button():
                 say("ok", "button", "press detected - wiring is good")
             else:
                 say("warn", "button", "no press seen (you may simply not have pressed)",
-                    "if nothing is wired to GPIO %d: python3 bot.py --nobutton" % bot.BUTTON_PIN)
+                    "nothing wired to GPIO %d is fine - plain bot.py counts down; the "
+                    "button is only needed for --button and rule 2.2" % bot.BUTTON_PIN)
     finally:
         b.close()
 
@@ -258,8 +259,10 @@ def main():
         print("\nfix these first: " + ", ".join(BAD))
         return 1
     print("\nNothing blocking. If the robot still sits still, it IS running and just")
-    print("hasn't been started: it waits at the prompt until the button (or the")
-    print("--nobutton countdown) fires. Watch it decide with:  python3 bot.py --dry")
+    print("hasn't been started: plain bot.py counts down 5 s and goes, while")
+    print("bot.py --button waits at the prompt for a press. Watch it decide with:")
+    print("  python3 bot.py --dry        decisions printed, no motors")
+    print("  python3 bot.py --stream     watch the camera from a laptop browser")
     return 0
 
 
