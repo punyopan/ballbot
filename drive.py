@@ -57,10 +57,6 @@ def warn_if_service_running():
 
 def run_move(robot, name, speed, seconds):
     vx, vy, w, what = MOVES[name]
-    if bot.TANK and vy:
-        # Say it out loud rather than letting the robot turn when you asked it to
-        # slide - two ganged channels have no sideways authority at all.
-        what = "NO STRAFE on a 2-channel chassis - this becomes a turn"
     print("%-10s %s" % (name, what), flush=True)
     robot.drive(vx * speed, vy * speed, w * speed)
     time.sleep(seconds)
@@ -78,7 +74,7 @@ def probe_pins(seconds=4.0):
     """
     from gpiozero import DigitalOutputDevice
     print("Probe each pin against GND. Ctrl-C to stop.\n")
-    for side, (fwd, back, en) in MOTORS_ITEMS():
+    for side, (fwd, back, en) in bot.MOTORS.items():
         # An IN pin alone does nothing while ENA/ENB is low, so hold enable high for
         # the whole channel - otherwise this probe reads dead on working hardware.
         gate = DigitalOutputDevice(en) if en is not None else None
@@ -100,13 +96,9 @@ def probe_pins(seconds=4.0):
             if gate:
                 gate.off()
                 gate.close()
-    print("\nAll four pins driven. If every Pi pin measured ~3.3 V but no motor turned,")
-    print("the Pi is not the problem - check motor supply, the ENA/ENB jumpers, and")
-    print("that the L298N GND is tied to a Pi GND.")
-
-
-def MOTORS_ITEMS():
-    return list(bot.MOTORS.items())
+    print("\nEvery pin driven. If each measured ~3.3 V at the Pi but no motor turned,")
+    print("the Pi is not the problem - check the motor supply on +12V, and that each")
+    print("L298N GND is tied to a Pi GND.")
 
 
 def main(argv=None):

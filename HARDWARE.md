@@ -28,15 +28,19 @@ The pin numbers here match the top of `bot.py` exactly. Change one, change both.
 job and adds speed control. If caps are fitted, pull them — they short enable to 5 V
 and fight the pin driving it. Short of wire, a dupont lead from the enable header to
 the board's own 5 V pin substitutes for a missing cap (full speed, no PWM on that
-channel). If you ever run only two channels, put two entries in `MOTORS` and
-`Robot.drive()` falls back to `tank()` by itself.
+channel).
+
+*Everything else:*
+
+| GPIO | Goes to | Notes |
+|---|---|---|
 | 4 | Start button | other side to GND, `gpiozero` pulls it up internally |
-| 27 | Kicker MOSFET gate | through a 220 Ω resistor; omit if you skip the kicker |
-| 17, 22 | HC-SR04 echo, trigger | **echo needs a divider — see below** |
 | 2, 3 | I2C SDA, SCL | IMU. Don't reassign these, they're the hardware I2C |
 
+No kicker and no sonar are fitted, and `bot.py` carries no code for either — we push
+the ball in, and the stuck-detector in `play()` is what digs us out of a wall grind.
 Nothing collides, and I2C is left clear. There are 12 pins on motors alone, so if you
-add anything later, take it from 7, 8, 9, 10, 11, 26.
+add anything later, take it from 7, 8, 9, 10, 11, 17, 22, 26, 27.
 
 ## Power — the thing that actually kills these robots
 
@@ -137,12 +141,13 @@ Trigger (GPIO 22) is an output, so it needs nothing. If you're buying fresh, get
 **VL53L0X** instead — it's I2C, natively 3.3 V, no divider, more accurate, and shares
 the two pins the IMU already uses.
 
-*Check it* — `python3 bot.py --check` prints `front_cm`. Put your hand in front of the
-sensor and run it again; the number should drop. `None` means `SONAR_PINS` is set to
-`None` in `bot.py`, and a number stuck at 100 means it never hears an echo.
+> **Not currently fitted.** `bot.py` has no sonar code at all — there is no
+> `SONAR_PINS` and no `front_cm()`. Adding one back means restoring both, and note
+> that gpiozero's `DistanceSensor.distance` **blocks forever** when nothing echoes,
+> so it has to be read on a background thread or it freezes the match loop.
 
-**Solenoid kicker — skip this for your first competition.** Set `KICKER_PIN = None` in
-`bot.py` and the rest of the robot works exactly as it is. A plow at full throttle
+**Solenoid kicker — skip this for your first competition.** `bot.py` has no kicker
+code and the robot works exactly as it is. A plow at full throttle
 already puts the ball in the goal; a kicker spends weight, length, current and one more
 brownout risk to do the same job. Build it later for the design prize (12.4).
 
@@ -239,8 +244,8 @@ two sides (2.3), all four mecanum wheels (4.4), a start button on the robot (2.2
 
 **Leave it off for your first competition**
 - *Solenoid kicker.* It adds weight, current spikes, wiring, and a new failure mode,
-  to do something a plow and full throttle already do. `bot.py` runs fine without one
-  (`KICKER_PIN = None`). Build it for the design prize (12.4) after you can score.
+  to do something a plow and full throttle already do. `bot.py` carries no kicker
+  code at all. Build it for the design prize (12.4) after you can score.
 
 ## Shopping list
 

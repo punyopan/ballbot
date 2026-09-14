@@ -2,7 +2,7 @@
 """Self-check for the driving maths and the strategy. Run: python3 test_bot.py"""
 import sys
 sys.argv.append("--dry")
-from bot import mix, tank, angle_diff, decide, gyro_step, should_escape, Gyro, TUNE
+from bot import mix, angle_diff, decide, gyro_step, should_escape, Gyro, TUNE
 
 
 def approx(a, b, tol=1e-6):
@@ -18,17 +18,6 @@ def test_mix():
     assert approx(mix(0.5, 0, 0), (0.5, 0.5, 0.5, 0.5)), "small commands are not normalised up"
 
 
-def test_tank():
-    assert approx(tank(1, 0), (1, 1)), "forward = both sides forward"
-    assert approx(tank(-1, 0), (-1, -1))
-    assert approx(tank(0, 1), (-1, 1)), "CCW = left side back, right side fwd"
-    assert approx(tank(0.5, 0), (0.5, 0.5)), "small commands are not normalised up"
-    assert max(abs(v) for v in tank(1, 1)) <= 1.0, "must stay inside motor range"
-    # Same sign convention as the four-wheel mixer, so decide() needs no special case.
-    assert approx(tank(1, 0), mix(1, 0, 0)[:2]), "agrees with mix on straight forward"
-    assert approx(tank(0, 1), mix(0, 0, 1)[:2]), "agrees with mix on spin"
-
-
 def test_angle_diff():
     assert angle_diff(10, 350) == 20, "wraps across north"
     assert angle_diff(350, 10) == -20
@@ -39,24 +28,21 @@ def test_angle_diff():
 def test_decide():
     close, far = TUNE["close_radius"] + 5, TUNE["close_radius"] - 15
 
-    vx, vy, w, kick = decide(None, 0, None, {"spin": 1})
-    assert not kick and w > 0 and vx < 0, "no ball: spin and ease back"
+    vx, vy, w = decide(None, 0, {"spin": 1})
+    assert w > 0 and vx < 0, "no ball: spin and ease back"
 
-    vx, vy, w, kick = decide((0.0, close), 0.0, None, {})
-    assert kick and vx > 0.5, "on the ball and aimed: charge and kick"
+    vx, vy, w = decide((0.0, close), 0.0, {})
+    assert vx > 0.5, "on the ball and aimed: drive through it"
 
-    vx, vy, w, kick = decide((0.0, close), 60.0, None, {})
-    assert not kick and vy < 0 and w > 0, "goal is to our left: slide right around the ball"
-    assert decide((0.0, close), -60.0, None, {})[1] > 0, "mirrored for the other side"
+    vx, vy, w = decide((0.0, close), 60.0, {})
+    assert vy < 0 and w > 0, "goal is to our left: slide right around the ball"
+    assert decide((0.0, close), -60.0, {})[1] > 0, "mirrored for the other side"
 
-    vx, vy, w, kick = decide((0.8, far), None, None, {})
-    assert vy < 0 and vx > 0 and not kick, "ball far right: drive and strafe right"
-
-    vx, vy, w, kick = decide((0.0, far), 0.0, TUNE["wall_cm"] - 1, {"spin": 1})
-    assert vx < 0, "wall ahead without the ball: back off (rule 10.1)"
+    vx, vy, w = decide((0.8, far), None, {})
+    assert vy < 0 and vx > 0, "ball far right: drive and strafe right"
 
     st = {}
-    decide((0.5, far), None, None, st)
+    decide((0.5, far), None, st)
     assert st["spin"] == -1, "remembers which way the ball went for the next search"
 
 
@@ -64,26 +50,24 @@ def test_ball_memory():
     close, far = TUNE["close_radius"] + 5, TUNE["close_radius"] - 15
 
     st = {}
-    decide((0.0, close), 0.0, None, st)          # had it right on the nose...
-    assert decide(None, 0.0, None, st)[0] > 0, "...then it vanished under the plow: push on"
+    decide((0.0, close), 0.0, st)                # had it right on the nose...
+    assert decide(None, 0.0, st)[0] > 0, "...then it vanished under the plow: push on"
     for _ in range(TUNE["ball_memory"] + 1):
-        out = decide(None, 0.0, None, st)
+        out = decide(None, 0.0, st)
     assert out[0] < 0, "but give up eventually instead of driving blind forever"
 
     st = {}
-    decide((0.0, far), 0.0, None, st)            # only ever saw it far away
-    assert decide(None, 0.0, None, st)[0] < 0, "a ball lost at distance is really lost"
+    decide((0.0, far), 0.0, st)                  # only ever saw it far away
+    assert decide(None, 0.0, st)[0] < 0, "a ball lost at distance is really lost"
 
 
 def test_blind():
     st = {}
-    vx, vy, w, kick = decide(None, 90.0, None, st, blind=True)
+    vx, vy, w = decide(None, 90.0, st, blind=True)
     assert vx > 0 and w > 0, "camera dead: still drive on the compass toward the goal"
-    ys = [decide(None, 0.0, None, st, blind=True)[1] for _ in range(90)]
+    ys = [decide(None, 0.0, st, blind=True)[1] for _ in range(90)]
     assert min(ys) < 0 < max(ys), "and sweep both ways instead of driving one line"
     assert len(set(ys)) == 2, "sweep is a slow flip, not per-frame jitter"
-    # blind is exactly when we can't see the wall coming, so the sonar has to win here
-    assert decide(None, 0.0, TUNE["wall_cm"] - 1, st, blind=True)[0] < 0, "back off a wall"
 
 
 def test_should_escape():
@@ -160,7 +144,7 @@ def test_find_ball_ignores_a_same_coloured_rival():
     assert dx > 0.4 and r > 30, "should prefer the nearer/bigger ball: %s" % ((dx, r),)
 
 
-for fn in (test_mix, test_tank, test_angle_diff, test_decide, test_ball_memory, test_blind, test_should_escape, test_gyro,
+for fn in (test_mix, test_angle_diff, test_decide, test_ball_memory, test_blind, test_should_escape, test_gyro,
            test_find_ball_ignores_a_same_coloured_rival):
     fn()
     print("ok", fn.__name__)

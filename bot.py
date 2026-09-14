@@ -40,12 +40,7 @@ START_COUNTDOWN = 5   # seconds, long enough to get your hands clear
 # gpiozero to leave it floating, the gate reads low, and nothing turns. None is only
 # for a board whose enable is jumpered to 5 V and has no wire to the Pi at all.
 MOTORS = {"FL": (5, 6, 12), "FR": (13, 19, 18), "BL": (16, 20, 21), "BR": (23, 24, 25)}
-# Only two channels wired? Use two entries and drive() falls back to tank() on its own:
-# MOTORS = {"L": (19, 13, 12), "R": (6, 5, 18)}
-TANK = len(MOTORS) == 2      # drop to differential drive when only two channels exist
 BUTTON_PIN = 4
-KICKER_PIN = None      # no kicker fitted - we push the ball in. Set to a GPIO if you add one.
-SONAR_PINS = (17, 22)  # HC-SR04 (echo, trigger); set None if you didn't fit one
 
 # --- everything worth changing trackside lives in tune.json
 DEFAULTS = {
@@ -63,11 +58,9 @@ DEFAULTS = {
     "turn_gain": 1.4,        # how hard we rotate onto the goal heading
     "search_spin": 0.45,
     "shoot_deg": 14,         # heading error we accept before charging the goal
-    "wall_cm": 14,
     "invert_strafe": 1,      # flip to -1 if it strafes the wrong way
     "invert_turn": 1,        # flip to -1 if it spins the wrong way
     "min_duty": 0.22,        # below this a motor just buzzes
-    "kick_cooldown": 2.2,    # rule 5.4: no re-grab within 2 s of a throw
     "blind_std": 12,         # frame contrast below this = lens covered
     "blind_frames": 15,      # ~0.5 s of that before we believe it
     "imu_sign": 1,           # flip to -1 if the MPU-6050 is mounted upside down
@@ -92,17 +85,6 @@ def mix(vx, vy, w):
     return fl / m, fr / m, bl / m, br / m
 
 
-def tank(vx, w):
-    """Differential mixer for two ganged channels -> (left, right).
-
-    There is no vy: two channels cannot strafe, so the caller drops it. Turning is
-    the only way this chassis corrects a sideways ball error, which is why decide()'s
-    strafe term has to be folded into the turn when TANK is set."""
-    l, r = vx - w, vx + w
-    m = max(1.0, abs(l), abs(r))
-    return l / m, r / m
-
-
 def angle_diff(target, current):
     """Signed degrees from current to target, in [-180, 180)."""
     return (target - current + 180) % 360 - 180
@@ -122,41 +104,39 @@ def should_escape(still, blind, asking_to_move, stalled_for):
     return still and not blind and asking_to_move and stalled_for > TUNE["stuck_secs"]
 
 
-def decide(ball, herr, front_cm, st, blind=False):
+def decide(ball, herr, st, blind=False):
     """ball = (dx in -1..1, radius_px) or None.
     herr = degrees we must turn counter-clockwise to face the enemy goal (None = no IMU).
     blind = the camera can't see anything (covered, knocked, or blown out).
-    Returns (vx, vy, w, kick)."""
+    Returns (vx, vy, w).
+
+    No sonar and no kicker on this robot: we push the ball in, and the stuck-detector
+    in play() is what digs us out of a wall grind."""
     T = TUNE
     st["n"] = st.get("n", 0) + 1
     aim = 0.0 if herr is None else clamp(herr * T["turn_gain"] / 90.0)
     if blind:
         # Can't find the ball, but the compass still knows where the goal is: push
         # that way and sweep, so a dead camera costs us the match instead of the game.
-        # Blind is exactly when we can't see a wall coming, so the sonar rules here.
-        if front_cm is not None and front_cm < T["wall_cm"]:
-            return (-T["speed"] * 0.5, 0.0, aim, False)
         sweep = 1.0 if (st["n"] // 30) % 2 == 0 else -1.0
-        return (T["speed"] * 0.8, sweep * 0.35, aim, True)
+        return (T["speed"] * 0.8, sweep * 0.35, aim)
     if ball is None:
         # At point-blank range the plow and the camera's own blind spot swallow the
         # ball. Losing it while it was CLOSE means it's on our nose, not gone - back
         # off now and you shove it away and chase it forever. Keep pushing briefly.
         if (st.get("seen_r", 0) >= T["close_radius"]
                 and st["n"] - st.get("seen_n", -999) < T["ball_memory"]):
-            return (T["speed"], 0.0, aim, True)
-        return (-0.12, 0.0, st.get("spin", 1) * T["search_spin"], False)
+            return (T["speed"], 0.0, aim)
+        return (-0.12, 0.0, st.get("spin", 1) * T["search_spin"])
     dx, r = ball
     st["spin"] = 1 if dx < 0 else -1
     st["seen_n"], st["seen_r"] = st["n"], r
-    if front_cm is not None and front_cm < T["wall_cm"] and r < T["close_radius"]:
-        return (-T["speed"], 0.0, st.get("spin", 1) * 0.3, False)  # 10.1: peel off the wall
     if r >= T["close_radius"]:
         if herr is None or abs(herr) < T["shoot_deg"]:
-            return (T["speed"], -dx * 0.35, aim, True)             # lined up: drive through it
+            return (T["speed"], -dx * 0.35, aim)                   # lined up: drive through it
         s = 1.0 if herr > 0 else -1.0
-        return (0.15, -s * T["speed"] * 0.9, aim, False)           # orbit around the ball
-    return (T["speed"] * (1 - 0.45 * abs(dx)), -dx * T["strafe_gain"], aim * 0.5, False)
+        return (0.15, -s * T["speed"] * 0.9, aim)                  # orbit around the ball
+    return (T["speed"] * (1 - 0.45 * abs(dx)), -dx * T["strafe_gain"], aim * 0.5)
 
 
 # ---------------------------------------------------------------- hardware
@@ -212,11 +192,11 @@ class Robot:
     """Every device is optional; whatever isn't wired up degrades to None."""
 
     def __init__(self):
-        self.motors = self.button = self.kicker = self.sonar = None
+        self.motors = self.button = None
         self.heading_fn = self.gyro = None
         if DRY:
             return
-        from gpiozero import Motor, Button, OutputDevice
+        from gpiozero import Motor, Button
         # enable=None means the board's enable is jumpered to 5 V and no wire reaches
         # the Pi. Say so out loud: if a wire IS there, this is the silent failure where
         # the IN pins read perfect on a meter and the wheels never move.
@@ -229,11 +209,6 @@ class Robot:
             else:
                 self.motors.append(Motor(f, b, enable=e, pwm=True))
         self.button = Button(BUTTON_PIN)
-        if KICKER_PIN is not None:
-            self.kicker = OutputDevice(KICKER_PIN)
-        if SONAR_PINS is not None:
-            from gpiozero import DistanceSensor
-            self.sonar = DistanceSensor(echo=SONAR_PINS[0], trigger=SONAR_PINS[1], max_distance=1.0)
         try:
             import board, adafruit_bno055
             bno = adafruit_bno055.BNO055_I2C(board.I2C())
@@ -252,14 +227,7 @@ class Robot:
     def drive(self, vx, vy, w):
         vy *= TUNE["invert_strafe"]
         w *= TUNE["invert_turn"]
-        if TANK:
-            # Two ganged channels cannot strafe. Rather than throw the sideways
-            # command away and creep past the ball, spend it as extra turn - the only
-            # authority this chassis has over a left/right error.
-            w = clamp(w + vy * TUNE["strafe_gain"] * 0.5)
-            vals = tank(vx, w)
-        else:
-            vals = mix(vx, vy, w)
+        vals = mix(vx, vy, w)
         if DRY:
             print("vx%+.2f vy%+.2f w%+.2f -> %s" %
                   (vx, vy, w, " ".join("%+.2f" % v for v in vals)))
@@ -275,12 +243,6 @@ class Robot:
         """Degrees, counting clockwise, or None if no IMU is fitted."""
         return None if self.heading_fn is None else self.heading_fn()
 
-    def front_cm(self):
-        return None if self.sonar is None else self.sonar.distance * 100
-
-    def kick(self):
-        if self.kicker:
-            self.kicker.on(); time.sleep(0.06); self.kicker.off()
 
 
 # ---------------------------------------------------------------- vision
@@ -335,7 +297,7 @@ def find_ball(frame):
 # ---------------------------------------------------------------- main
 def play(bot, grab, goal_heading, t_end):
     import numpy as np
-    st, last_kick, stuck_since, prev = {"spin": 1}, 0.0, time.time(), None
+    st, stuck_since, prev = {"spin": 1}, time.time(), None
     while time.time() < t_end:
         # A toggle switch left in the ON position reads as "pressed" forever, which
         # would break out on frame one - so --nobutton ignores the stop check too.
@@ -349,7 +311,7 @@ def play(bot, grab, goal_heading, t_end):
         ball = None if (blind or frame is None) else find_ball(frame)
         h = bot.heading()
         herr = None if (h is None or goal_heading is None) else -angle_diff(goal_heading, h)
-        vx, vy, w, kick = decide(ball, herr, bot.front_cm(), st, blind)
+        vx, vy, w = decide(ball, herr, st, blind)
 
         now = time.time()
         small = None if frame is None else frame[::8, ::8].astype(np.int16)
@@ -366,8 +328,6 @@ def play(bot, grab, goal_heading, t_end):
                 time.sleep(0.02)
             stuck_since = time.time()
             continue
-        if kick and now - last_kick > TUNE["kick_cooldown"]:
-            bot.kick(); last_kick = now
         bot.drive(vx, vy, w)
         time.sleep(0.02)
     bot.stop()
@@ -394,7 +354,7 @@ def selftest():
     # numpy usually dies in BLAS rather than on import, so actually do some maths
     print("numpy maths :", numpy.zeros((32, 32)).dot(numpy.ones((32, 32))).sum(), "(want 0.0)")
     bot = Robot()
-    print("heading     :", bot.heading(), " front_cm:", bot.front_cm())
+    print("heading     :", bot.heading())
     frame = open_camera()()
     print("camera      :", "NO FRAME" if frame is None else
           "%s contrast %.1f%s" % (frame.shape, frame.std(),

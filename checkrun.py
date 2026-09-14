@@ -146,8 +146,7 @@ def check_button():
 # ------------------------------------------------------------------ 5. i2c
 def check_motor_pins():
     head("4b. motor pins")
-    say("ok", "channels", "%d (%s)%s" % (len(bot.MOTORS), ", ".join(bot.MOTORS),
-                                         "  TANK/differential" if bot.TANK else "  mecanum"))
+    say("ok", "channels", "%d (%s)" % (len(bot.MOTORS), ", ".join(bot.MOTORS)))
     # The failure that looks exactly like a dead robot while every IN pin measures
     # right: enable gates the H-bridge, so an undriven enable means no current at all.
     undriven = [n for n, (_f, _b, e) in bot.MOTORS.items() if e is None]
@@ -166,10 +165,9 @@ def check_motor_pins():
                 say("bad", "pin clash", "GPIO %d used by %s and %s" % (p, seen[p], name),
                     "two devices cannot share a pin - renumber one in MOTORS")
             seen[p] = name
-    for other, pin in (("button", bot.BUTTON_PIN), ("kicker", bot.KICKER_PIN)):
-        if pin is not None and pin in seen:
-            say("bad", "pin clash", "GPIO %d is both %s and %s" % (pin, seen[pin], other),
-                "renumber one of them")
+    if bot.BUTTON_PIN in seen:
+        say("bad", "pin clash", "GPIO %d is both %s and the button"
+            % (bot.BUTTON_PIN, seen[bot.BUTTON_PIN]), "renumber one of them")
     if not BAD:
         say("ok", "no clashes", "%d pins, all distinct" % len(seen))
 
@@ -244,10 +242,6 @@ def check_tune():
     else:
         say("warn", "tune.json", "missing - running on built-in DEFAULTS",
             "python3 calibrate.py on the field, under the real lights, then press 's'")
-    if bot.SONAR_PINS is None:
-        say("warn", "sonar", "not fitted (optional)")
-    else:
-        say("ok", "sonar", "pins %s" % (bot.SONAR_PINS,))
 
 
 def main():

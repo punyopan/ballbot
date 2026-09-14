@@ -10,7 +10,8 @@ motor driver board, 18650 battery box. Everything below is legal modification.
 | `bot.py` | the whole robot: vision → strategy → mecanum drive |
 | `calibrate.py` | slider tool to lock the ball colour on the real field → `tune.json` |
 | `test_bot.py` | self-check for the driving maths and the strategy, runs on a laptop |
-| `test_canitrun.py` | short movement check: forward, backward, strafe, and turn; no camera needed |
+| `drive.py` | drive the chassis by hand: forward, strafe, spin; also `--pins` to probe wiring |
+| `checkrun.py` | "why won't it run" — walks the stack and prints a fix for each failure |
 | `tune.json` | written by calibrate; every number you'd want to change at the venue |
 | `ballbot.service` | starts `bot.py` at power-on, because rule 9.1.3 bans laptops at the field |
 | `HARDWARE.md` | pinout, power, wiring, shopping list |
@@ -79,12 +80,14 @@ python3 bot.py --dry    # prints motor commands instead of driving
 ## Bring-up order, once it's on the Pi
 
 For a short movement check, raise the robot so the wheels hang free and run
-`python3 test_canitrun.py`. Press and release the start button to begin.
-It runs six moves at 40% power, then stops automatically. Press the button again
-or Ctrl-C to stop early. Adjust with `--speed 0.3 --seconds 2` if needed.
-Watch the wheels to confirm each printed direction; completion alone does not
-prove the motors moved. On a laptop, use `python test_canitrun.py --dry` to
-check command generation without GPIO or a camera.
+`python3 drive.py forward left spin`. It runs each named move at 40% power after a
+3 s countdown, then stops. Ctrl-C stops early, `--speed` and `--seconds` adjust it,
+and `--list` shows every move. Watch the wheels to confirm each printed direction;
+completion alone does not prove the motors moved. On a laptop, `--dry` prints the
+wheel values without GPIO or a camera.
+
+If nothing happens at all, run `python3 checkrun.py` — it walks the whole stack and
+prints a FIX line for whatever is wrong, without driving a motor.
 
 Do these in order. Each one assumes the last passed.
 
@@ -156,8 +159,8 @@ So: open front, ball always able to roll out. All the code assumes this.
    4.2/5.5, they funnel the ball into the plow. Keep them fixed and open; a wing that
    closes counts as gripping.
 5. **12 V solenoid kicker (optional)** — one GPIO through a MOSFET and a flyback
-   diode. `KICKER_PIN` in `bot.py`; the fire only happens when the ball is close
-   AND the nose is on the goal, with a 2.2 s cooldown for rule 5.4.
+   diode. Not fitted and not in `bot.py`: we push the ball in. Adding one means
+   adding the pin, the fire condition, and a cooldown for rule 5.4 yourself.
 6. **Rubber tread or O-rings on the rollers** — the green field is slippery and
    mecanum loses grip first.
 7. Kill switch (required, rule 4.5), battery in its box (required), team colour
