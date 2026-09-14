@@ -8,7 +8,8 @@ motor driver board, 18650 battery box. Everything below is legal modification.
 | file | what it is |
 |---|---|
 | `bot.py` | the whole robot: vision → strategy → mecanum drive. `--button` to start on a press, `--stream` to watch from a laptop |
-| `calibrate.py` | slider tool to lock the ball colour on the real field → `tune.json` |
+| `calibrate.py` | lock the ball colour on the real field → `tune.json`. Tunes from a laptop browser when the Pi has no screen |
+| `calibrate_frame.py` | the same tuner for the black walls and goal frame → `frame_lo` / `frame_hi` in `tune.json`. Nothing steers on it yet |
 | `test_bot.py` | self-check for the driving maths and the strategy, runs on a laptop |
 | `drive.py` | drive the chassis by hand: forward, strafe, spin; also `--pins` to probe wiring |
 | `checkrun.py` | "why won't it run" — walks the stack and prints a fix for each failure |
@@ -105,6 +106,32 @@ at 10 fps so the match loop keeps its timing.
 **Turn it off at the venue.** Rule 2.2 bans wifi during a match, which is why it is
 opt-in and why `ballbot.service` does not pass it.
 
+## Tuning the ball colour from a laptop
+
+`python3 calibrate.py` with no screen on the Pi starts the same kind of server at
+`http://<pi-address>:8001/` (`--web 9000` for another port, `--gui` to force the local
+window). It shows the camera and the mask **side by side** — the mask is the thing you
+are actually tuning, and you want the ball solid white with the floor black.
+
+Click the ball on either image to eyedrop it. Each click widens the range to include
+what you clicked, so click the lit side, the shadowed side and the edge; it takes the
+10th/90th percentile of an 11 px patch rather than min/max, so one specular highlight
+cannot blow the range open. Then nudge the sliders and press Save, which writes
+`tune.json`. Same rule 2.2 caveat as the stream: bench and practice only.
+
+## Tuning the black frame
+
+`python3 calibrate_frame.py` is the same tuner pointed at the black walls, goal posts
+and crossbar, at `http://<pi-address>:8002/`. Click the wall — the lit side and the
+side in shadow — and each click raises the brightness ceiling (`V hi`) to include it;
+hue and saturation stay wide open, because on black they are mostly sensor noise.
+Tune until the frame is solid white in the mask while the white floor, the ball and
+the shadows under robots stay black, then Save.
+
+Nothing drives on this mask yet. The walls and the goal frame are the same black, so
+colour alone cannot tell them apart; the goal is the one place the frame has an
+opening. This mask is the first half of finding it.
+
 Do these in order. Each one assumes the last passed.
 
 ```bash
@@ -119,8 +146,10 @@ git clone https://github.com/punyopan/ballbot.git ~/ballbot && cd ~/ballbot
    Six moves, two seconds each. One wheel backwards → swap that motor's two wires
    at the driver. Sideways or spin backwards as a whole → `invert_strafe` /
    `invert_turn` in `tune.json`. Nothing later works until this is right.
-5. `python3 calibrate.py` — needs a screen (monitor on the Pi, or `ssh -X`).
-   Sliders until only the ball is white, press `s`.
+5. `python3 calibrate.py` — over ssh this starts a web tuner at
+   `http://<pi-address>:8001/`; with a monitor on the Pi it opens a window instead.
+   Click the ball to eyedrop it, nudge the sliders until only the ball is white in
+   the mask, then Save (or press `s` in the window).
 6. **On the floor with the ball.** Hold the ball where you want the robot to commit
    and read the printed `r` from calibrate — that's your `close_radius`. Then run
    `python3 bot.py` and let it play.
@@ -240,7 +269,8 @@ Things that lose matches for reasons that have nothing to do with your code:
 
 ## Tuning at the venue
 
-1. `python3 calibrate.py` — sliders until only the ball is white, press `s`.
+1. `python3 calibrate.py` — click the ball, then tune until only the ball is white
+   in the mask, and save. See [Tuning the ball colour from a laptop](#tuning-the-ball-colour-from-a-laptop).
 2. Drive on the field. If it strafes the wrong way set `invert_strafe: -1` in
    `tune.json`; if it spins the wrong way set `invert_turn: -1`.
 3. Hold the ball where you want the robot to commit and read the printed `r` —

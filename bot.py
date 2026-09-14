@@ -8,6 +8,7 @@
   python3 bot.py --wheels bring-up: wheel directions, WHEELS OFF THE GROUND
   python3 bot.py --dry    no motors, prints what it would do (test on a laptop)
   python3 calibrate.py   tune the ball colour at the venue -> tune.json
+  python3 calibrate_frame.py  tune the black walls and goal frame -> tune.json
 
 Rules this code is built around:
   2.2  autonomous only, one button press, no remote / wifi
@@ -71,7 +72,7 @@ DEFAULTS = {
     "min_area": 60,          # px, ignore specks
     "min_round": 0.72,       # blob area / enclosing-circle area. Ball ~.85, chassis way under.
                              # Raise it if we chase the rival, lower it if we ignore the ball.
-    "close_radius": 34,      # ball radius in px that means "we are on it"
+    "close_radius": 34,      # ball radius in px (at 320 wide) that means "we are on it"
     "speed": 0.75,           # base power 0..1
     "strafe_gain": 1.2,      # how hard we slide sideways onto the ball
     "turn_gain": 1.4,        # how hard we rotate onto the goal heading
@@ -87,6 +88,25 @@ DEFAULTS = {
     "ball_memory": 25,       # frames to keep pushing after the plow hides the ball
     "motion_min": 2.5,       # frame-to-frame pixel change below this = we aren't moving
     "stuck_secs": 2.5,       # how long that has to hold before we thrash free
+    # --- the black field frame: walls, goal posts, crossbar. Tuned with
+    # calibrate_frame.py. Nothing steers on it yet - it is the mask a goal detector
+    # gets built on, since the goal is the one place the frame has an opening. Black
+    # is the dark end of the scale and its hue and saturation are mostly sensor noise,
+    # so V hi is the number that matters.
+    "frame_lo": [0, 0, 0], "frame_hi": [179, 255, 70],
+    # --- USB webcam controls. These live on the device, not in the program, so they
+    # reset on a replug or a reboot unless we set them at every start.
+    #
+    # Measured on this camera by sweeping focus and scoring sharpness: the FAR field
+    # (top of frame) peaks at 64, the NEAR field (bottom) peaks at 320, and past 192
+    # the far field collapses and never recovers. There is no value that is sharp at
+    # both, so 128 is the compromise that leaves each at about 45% of its own peak.
+    # null hands focus back to the camera's continuous autofocus, which hunts.
+    "cam_focus": 128,
+    # Auto white balance is the quiet killer of a tuned HSV window: it shifts hue as
+    # the scene changes, so the colour you calibrated stops being the colour you see.
+    # Lock it, and re-run calibrate.py if the venue's lights are different.
+    "cam_lock_wb": 1,
 }
 _tf = os.path.join(HERE, "tune.json")
 TUNE = {**DEFAULTS, **(json.load(open(_tf)) if os.path.exists(_tf) else {})}
@@ -265,6 +285,36 @@ class Robot:
 
 
 # ---------------------------------------------------------------- vision
+def cam_control(name, value, dev="/dev/video0"):
+    """Set one V4L2 control on a USB webcam. -> True if it took.
+
+    v4l2-ctl rather than cv2's CAP_PROP_*, for one practical reason: it works on a
+    device another process is already streaming from, which is what lets you tune
+    focus while watching calibrate.py's own stream. Missing tool or missing control
+    is not an error - plenty of cameras have neither, and the robot still plays."""
+    import shutil, subprocess
+    if not shutil.which("v4l2-ctl") or not os.path.exists(dev):
+        return False
+    r = subprocess.run(["v4l2-ctl", "-d", dev, "-c", "%s=%s" % (name, value)],
+                       capture_output=True, text=True)
+    return r.returncode == 0
+
+
+def apply_cam_controls():
+    """Pin focus and white balance, both of which otherwise drift mid-match."""
+    if TUNE.get("cam_lock_wb"):
+        cam_control("white_balance_automatic", 0)
+    focus = TUNE.get("cam_focus")
+    if focus is None:
+        cam_control("focus_automatic_continuous", 1)
+        return
+    # Order matters: focus_absolute reads as inactive and is ignored while the
+    # camera's own continuous autofocus still owns the lens.
+    if cam_control("focus_automatic_continuous", 0):
+        if cam_control("focus_absolute", int(focus)):
+            print("camera: focus locked at %d" % int(focus))
+
+
 def open_camera():
     import cv2
     try:
@@ -276,7 +326,28 @@ def open_camera():
     except Exception:
         cap = cv2.VideoCapture(0)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320); cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
-        return lambda: cap.read()[1]
+        # A webcam is free to refuse the size and hand back its own - this one gives
+        # 640x480 for a 320x240 request. That is not just four times the work: every
+        # pixel threshold here (close_radius, min_area) was tuned at 320 wide, so at
+        # 640 a ball a metre away already reads as "on it" and the robot starts
+        # orbiting and charging from across the room. Shrink it back to the scale the
+        # numbers mean. Keep the aspect ratio - squashing a 16:9 frame into 4:3 would
+        # turn the ball into an ellipse and fail the min_round test.
+        got = (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
+        if got[0] != 320:
+            print("camera: asked for 320x240, got %dx%d - resizing each frame to 320 wide"
+                  % got)
+        apply_cam_controls()
+
+        def grab():
+            ok, f = cap.read()
+            if not ok or f is None:
+                return None
+            if f.shape[1] != 320:
+                f = cv2.resize(f, (320, f.shape[0] * 320 // f.shape[1]),
+                               interpolation=cv2.INTER_AREA)
+            return f
+        return grab
 
 
 def is_blind(frame):
@@ -285,12 +356,26 @@ def is_blind(frame):
     return frame is None or frame.std() < TUNE["blind_std"]
 
 
-def find_ball(frame):
-    """-> (dx in -1..1, radius_px) or None."""
+def colour_mask(frame, lo, hi):
+    """Blur, keep the pixels inside an HSV range, drop specks.
+
+    One function for the ball, the black frame and both tuners, so the mask a tuner
+    shows you is exactly the mask the robot steers on."""
     import cv2, numpy as np
     hsv = cv2.cvtColor(cv2.GaussianBlur(frame, (5, 5), 0), cv2.COLOR_BGR2HSV)
-    mask = cv2.inRange(hsv, np.array(TUNE["hsv_lo"]), np.array(TUNE["hsv_hi"]))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+    mask = cv2.inRange(hsv, np.array(lo), np.array(hi))
+    return cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
+
+
+def frame_mask(frame):
+    """Pixels that are the black field frame: walls, goal posts, crossbar."""
+    return colour_mask(frame, TUNE["frame_lo"], TUNE["frame_hi"])
+
+
+def find_ball(frame):
+    """-> (dx in -1..1, radius_px) or None."""
+    import cv2
+    mask = colour_mask(frame, TUNE["hsv_lo"], TUNE["hsv_hi"])
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     # A rival can be painted the ball's own green, and it is BIGGER than the ball -
     # so taking the largest green blob drives us straight into it. Only a ball fills
@@ -384,25 +469,35 @@ class Streamer:
 
     BOUNDARY = b"ballbotframe"
 
-    def __init__(self, port=8000, quality=55, fps=10):
+    def __init__(self, port=8000, quality=55, fps=10, page=PAGE, routes=None,
+                 label="stream", fatal=False):
         self.port, self.quality, self.min_dt = port, quality, 1.0 / fps
         self.jpeg, self.seq, self.viewers, self.sent_at = None, 0, 0, 0.0
         self.cond = threading.Condition()
         self.server = None
+        # page and routes are what let a second tool reuse this: calibrate.py serves
+        # its own controls here and gets the mjpeg plumbing for free. A route is
+        # fn(query_dict) -> (content_type, bytes), called on an http thread.
+        self.page, self.routes = page, routes or {}
+        self.label, self.fatal = label, fatal
 
     def start(self):
         from http.server import ThreadingHTTPServer
         try:
             self.server = ThreadingHTTPServer(("", self.port), _stream_handler(self))
         except OSError as e:
-            # A stale bot.py still holding the port is the usual cause. Losing the
-            # video is not a reason to refuse to drive, so say so and carry on.
-            print("stream: port %d unavailable (%s) - running without it" % (self.port, e))
+            # A stale process still holding the port is the usual cause. For bot.py
+            # losing the video is no reason to refuse to drive, so it carries on;
+            # for a tool whose whole interface IS the page, carrying on is useless.
+            msg = "%s: port %d unavailable (%s)" % (self.label, self.port, e)
+            if self.fatal:
+                raise SystemExit(msg + "\n  free it, or pass a different port")
+            print(msg + " - running without it")
             return self
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        print("stream: http://%s:%d/   (rule 2.2 bans wifi in a match - bench only)"
-              % (lan_ip(), self.port))
+        print("%s: http://%s:%d/   (rule 2.2 bans wifi in a match - bench only)"
+              % (self.label, lan_ip(), self.port))
         return self
 
     def wants_frame(self):
@@ -458,13 +553,26 @@ def _stream_handler(streamer):
             pass            # the console is for the match, not for access logs
 
         def do_GET(self):
-            if self.path.startswith("/stream"):
+            from urllib.parse import urlparse, parse_qs
+            u = urlparse(self.path)
+            if u.path.startswith("/stream"):
                 return self.mjpeg()
+            route = streamer.routes.get(u.path)
+            if route is not None:
+                try:
+                    ctype, body = route(parse_qs(u.query))
+                except Exception as e:
+                    # A control that throws must not kill the tuner - report it to
+                    # the browser and leave the camera loop running.
+                    return self.send_error(500, "%s: %s" % (type(e).__name__, e))
+            else:
+                ctype, body = "text/html; charset=utf-8", streamer.page
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(PAGE)))
+            self.send_header("Content-Type", ctype)
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
             self.end_headers()
-            self.wfile.write(PAGE)
+            self.wfile.write(body)
 
         def mjpeg(self):
             self.send_response(200)
