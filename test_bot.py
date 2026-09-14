@@ -149,8 +149,28 @@ def test_find_ball_ignores_a_same_coloured_rival():
     assert dx > 0.4 and r > 30, "should prefer the nearer/bigger ball: %s" % ((dx, r),)
 
 
+def test_stream():
+    """--stream must hand a browser real MJPEG, and only on / (favicon.ico gets a 404)."""
+    import time, urllib.request, urllib.error, numpy as np
+    import bot
+    bot._latest = (np.full((240, 320, 3), 40, np.uint8), (0.25, 20.0))
+    bot.start_stream(8765)
+    time.sleep(0.3)
+    r = urllib.request.urlopen("http://127.0.0.1:8765/", timeout=3)
+    assert r.headers["Content-Type"].startswith("multipart/x-mixed-replace")
+    head = r.read(80)
+    assert head.startswith(b"--frame\r\nContent-Type: image/jpeg\r\n"), head
+    assert b"\r\n\r\n\xff\xd8" in head, "part body should be a JPEG: %r" % head
+    try:
+        urllib.request.urlopen("http://127.0.0.1:8765/favicon.ico", timeout=3)
+        assert False, "favicon.ico should 404, not get a stream"
+    except urllib.error.HTTPError as e:
+        assert e.code == 404
+    bot._latest = None
+
+
 for fn in (test_mix, test_angle_diff, test_decide, test_ball_memory, test_blind, test_should_escape, test_gyro,
-           test_find_ball_ignores_a_same_coloured_rival):
+           test_find_ball_ignores_a_same_coloured_rival, test_stream):
     fn()
     print("ok", fn.__name__)
 print("all good")

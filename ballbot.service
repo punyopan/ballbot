@@ -1,5 +1,6 @@
 # Rule 9.1.3: no computer at the field, so bot.py must already be running when you
-# place the robot. This starts it at power-on; it then just waits for the button.
+# place the robot. This starts it at power-on; --button makes it wait for the press.
+# Never drop --button here: without it the robot drives off 5 s after boot.
 # Restart=always means a crash mid-match costs you seconds, not the match.
 #
 #   sudo cp ballbot.service /etc/systemd/system/
@@ -16,7 +17,7 @@ After=multi-user.target
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/ballbot
-ExecStart=/usr/bin/python3 /home/pi/ballbot/bot.py
+ExecStart=/usr/bin/python3 /home/pi/ballbot/bot.py --button
 Restart=always
 RestartSec=3
 

@@ -104,7 +104,8 @@ git clone https://github.com/punyopan/ballbot.git ~/ballbot && cd ~/ballbot
    Sliders until only the ball is white, press `s`.
 6. **On the floor with the ball.** Hold the ball where you want the robot to commit
    and read the printed `r` from calibrate — that's your `close_radius`. Then run
-   `python3 bot.py` and let it play.
+   `python3 bot.py`, set it down aimed at the enemy goal during the 5 s countdown,
+   and let it play. Matches use `python3 bot.py --button` (the service already does).
 7. Only now install the service:
    `sudo cp ballbot.service /etc/systemd/system/ && sudo systemctl enable --now ballbot`
 

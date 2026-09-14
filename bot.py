@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Ball-touch robot: 100% autonomous, Raspberry Pi 4 + 4x mecanum + top camera.
 
-  python3 bot.py         run for real (press the start button once)
+  python3 bot.py         bench run: 5 s countdown, plays once, exits (no button needed)
+  python3 bot.py --button MATCHES: wait for the start button each segment (rule 2.2)
   python3 bot.py --check  prove numpy/cv2/camera/IMU work on this board
   python3 bot.py --wheels bring-up: wheel directions, WHEELS OFF THE GROUND
   python3 bot.py --dry    no motors, prints what it would do (test on a laptop)
+  python3 bot.py --stream also serve the camera at http://<pi>.local:8000 (TESTING ONLY, 2.2)
   python3 calibrate.py   tune the ball colour at the venue -> tune.json
 
 Rules this code is built around:
@@ -18,6 +20,9 @@ import json, math, os, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DRY = "--dry" in sys.argv
+STREAM = "--stream" in sys.argv   # rule 2.2 bans wifi in a match: never pass this at the venue
+BUTTON = "--button" in sys.argv   # without it we start on a countdown - matches need the button (2.2)
+COUNTDOWN = 5                     # s to set the robot down, aimed and still, before it moves
 
 # --- pins (BCM). Motor = (forward, backward, enable/pwm). Match your driver board.
 MOTORS = {"FL": (5, 6, 12), "FR": (13, 19, 18), "BL": (16, 20, 21), "BR": (23, 24, 25)}
@@ -283,8 +288,67 @@ def find_ball(frame):
     return (x / (frame.shape[1] / 2) - 1.0, r)
 
 
+def draw_ball(frame, ball):
+    """Mark what find_ball saw, in place. find_ball drops y, so the circle sits mid-height."""
+    import cv2
+    if ball:
+        dx, r = ball
+        cx = int((dx + 1) * frame.shape[1] / 2)
+        cv2.circle(frame, (cx, frame.shape[0] // 2), int(r), (255, 0, 255), 2)
+        cv2.putText(frame, "dx %+.2f  r %.0f" % (dx, r), (5, 15),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
+    return frame
+
+
+# ---------------------------------------------------------------- debug stream
+_latest = None   # (frame, ball) - play() swaps it in, the stream thread reads it
+
+
+def start_stream(port=8000):
+    """MJPEG over plain HTTP: any browser plays it, nothing to install on the laptop.
+    The JPEG encoding happens in the server's thread, so the control loop only pays for
+    one reference swap per frame, and nothing at all while nobody is watching."""
+    import socket, threading, cv2
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            if self.path != "/":             # the browser's favicon.ico shouldn't get a stream
+                return self.send_error(404)
+            self.send_response(200)
+            self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+            self.end_headers()
+            last = None
+            try:
+                while True:
+                    snap = _latest
+                    if snap is None or snap is last:
+                        time.sleep(0.01)
+                        continue
+                    last = snap
+                    frame, ball = snap
+                    ok, jpg = cv2.imencode(".jpg", draw_ball(frame.copy(), ball),
+                                           [cv2.IMWRITE_JPEG_QUALITY, 70])
+                    if not ok:
+                        continue
+                    self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\n"
+                                     b"Content-Length: %d\r\n\r\n" % len(jpg))
+                    self.wfile.write(jpg.tobytes() + b"\r\n")
+            except (BrokenPipeError, ConnectionResetError):
+                pass                             # laptop closed the tab
+
+        def log_message(self, *args):
+            pass                                 # keep the console for the robot's own prints
+
+    srv = ThreadingHTTPServer(("", port), Handler)
+    srv.daemon_threads = True
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    print("stream: http://%s.local:%d  (or the Pi's IP)" % (socket.gethostname(), port))
+
+
 # ---------------------------------------------------------------- main
 def play(bot, grab, goal_heading, t_end):
+    global _latest
     import numpy as np
     st, last_kick, stuck_since, prev = {"spin": 1}, 0.0, time.time(), None
     while time.time() < t_end:
@@ -296,6 +360,8 @@ def play(bot, grab, goal_heading, t_end):
         # A dropped frame reads as None. Don't hand that to OpenCV - it throws, and a
         # crash mid-match costs far more than a skipped frame.
         ball = None if (blind or frame is None) else find_ball(frame)
+        if STREAM and frame is not None:
+            _latest = (frame, ball)
         h = bot.heading()
         herr = None if (h is None or goal_heading is None) else -angle_diff(goal_heading, h)
         vx, vy, w, kick = decide(ball, herr, bot.front_cm(), st, blind)
@@ -390,12 +456,19 @@ def main():
         return wheeltest()
     bot = Robot()
     grab = open_camera()
+    if STREAM:
+        start_stream()
     left = 12 * 60
     try:
         while left > 0:
-            print("point the robot at the ENEMY goal, then press start")
-            if bot.button:
+            if BUTTON and bot.button:
+                print("point the robot at the ENEMY goal, then press start")
                 bot.button.wait_for_press(); bot.button.wait_for_release()
+            else:
+                print("point the robot at the ENEMY goal, starting in", end="", flush=True)
+                for s in range(COUNTDOWN, 0, -1):
+                    print(" %d" % s, end="", flush=True); time.sleep(1)
+                print()
             bot.zero_heading()      # robot is placed and still now; boot time was not
             goal_heading = bot.heading()
             print("go. %.0f s left, goal heading = %s" % (left, goal_heading))
@@ -403,8 +476,8 @@ def main():
             play(bot, grab, goal_heading, t0 + (5 if DRY else left))
             left -= time.time() - t0   # 6.3: a goal stops the clock, it doesn't reset it
             print("stopped, %.0f s left" % max(left, 0))
-            if DRY:
-                return
+            if DRY or not BUTTON:
+                return   # no start press to wait for, so looping would just drive off again
     except KeyboardInterrupt:
         pass
     finally:

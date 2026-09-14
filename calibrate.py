@@ -25,14 +25,7 @@ while True:
     bot.TUNE["hsv_lo"] = [cv2.getTrackbarPos(n, W) for n in ("H lo", "S lo", "V lo")]
     bot.TUNE["hsv_hi"] = [cv2.getTrackbarPos(n, W) for n in ("H hi", "S hi", "V hi")]
     bot.TUNE["min_round"] = cv2.getTrackbarPos("round%", W) / 100.0
-    found = bot.find_ball(frame)
-    if found:
-        dx, r = found
-        cx = int((dx + 1) * frame.shape[1] / 2)
-        cv2.circle(frame, (cx, frame.shape[0] // 2), int(r), (255, 0, 255), 2)
-        cv2.putText(frame, "dx %+.2f  r %.0f" % (dx, r), (5, 15),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 255), 1)
-    cv2.imshow(W, frame)
+    cv2.imshow(W, bot.draw_ball(frame, bot.find_ball(frame)))
     k = cv2.waitKey(30) & 0xFF
     if k == ord("s"):
         path = os.path.join(bot.HERE, "tune.json")
