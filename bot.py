@@ -4,6 +4,7 @@
   python3 bot.py         run: count down 5 s, then go
   python3 bot.py --button wait for the start button instead (rule 2.2 - use at the venue)
   python3 bot.py --stream watch the camera from a laptop: http://<pi>:8000/
+  python3 bot.py --object find the ball with a YOLO model (best.pt) instead of colour
   python3 bot.py --check  prove numpy/cv2/camera/IMU work on this board
   python3 bot.py --wheels bring-up: wheel directions, WHEELS OFF THE GROUND
   python3 bot.py --dry    no motors, prints what it would do (test on a laptop)
@@ -45,6 +46,10 @@ START_COUNTDOWN = 5   # seconds, long enough to get your hands clear
 # unless you ask for it. Bench and practice only.
 STREAM = "--stream" in sys.argv
 STREAM_PORT = int(argval("--stream", 8000))
+# --object swaps the HSV colour window for a trained detector. `--object` alone loads
+# TUNE["obj_model"]; `--object best_ncnn_model` names another model for this run.
+OBJECT = "--object" in sys.argv
+OBJECT_MODEL = argval("--object")
 
 # --- pins (BCM). Motor = (forward, backward, enable/pwm). Match your driver board.
 # TWO L298N boards, one motor per mecanum wheel, so all four turn independently -
@@ -107,6 +112,17 @@ DEFAULTS = {
     # the scene changes, so the colour you calibrated stops being the colour you see.
     # Lock it, and re-run calibrate.py if the venue's lights are different.
     "cam_lock_wb": 1,
+    # --- --object mode: a YOLO detector finds the ball instead of the colour window.
+    # A .pt runs on PyTorch, about 3.5 fps at 320 on a Pi 4. Export it once to NCNN
+    # for roughly three times that, then point obj_model at the folder it writes:
+    #   yolo export model=best.pt format=ncnn imgsz=320   -> best_ncnn_model/
+    "obj_model": "best.pt",  # relative paths are tried from the cwd, then next to bot.py
+    "obj_class": "ball",     # class name, or list of names, that counts as the ball.
+                             # best.pt also knows "car", and a car is a rival robot we
+                             # must not chase. null takes ANY class - placeholders only
+    "obj_conf": 0.4,         # detections below this confidence are ignored
+    "obj_imgsz": 320,        # inference size; the frame is already 320 wide
+    "obj_max_age": 0.8,      # s; a detection older than this is not steered on
 }
 _tf = os.path.join(HERE, "tune.json")
 TUNE = {**DEFAULTS, **(json.load(open(_tf)) if os.path.exists(_tf) else {})}
@@ -398,6 +414,154 @@ def find_ball(frame):
     return (x / (frame.shape[1] / 2) - 1.0, r)
 
 
+# ---------------------------------------------------------------- object detection
+def pick_box(boxes, width, wanted=None):
+    """boxes = [(x1, y1, x2, y2, conf, class_name)] -> (dx in -1..1, radius_px) or None.
+
+    The same contract as find_ball, so decide() cannot tell which one found the ball.
+    Radius is half the LONGER side: a ball cut off by the frame edge loses one side of
+    its box, not the other, and close_radius must still read true when it's that near.
+    The class filter is what keeps a rival robot out; among what passes, the most
+    confident box wins, since a real field has only one ball in it."""
+    if isinstance(wanted, str):
+        wanted = [wanted]
+    best = None
+    for x1, y1, x2, y2, conf, name in boxes:
+        if wanted and name not in wanted:
+            continue
+        if best is None or conf > best[0]:
+            best = (conf, (x1 + x2) / 2.0, max(x2 - x1, y2 - y1) / 2.0)
+    if best is None:
+        return None
+    _c, x, r = best
+    return (x / (width / 2.0) - 1.0, r)
+
+
+def model_path(name):
+    """Find the model on disk, or raise. Checked here rather than left to ultralytics,
+    which answers a missing name that looks like a stock model by downloading it -
+    over the wifi rule 2.2 bans, and as a model that has never seen our ball."""
+    for p in (name, os.path.join(HERE, name)):
+        if os.path.exists(p):
+            return p
+    raise FileNotFoundError("no model %r in %s or %s" % (name, os.getcwd(), HERE))
+
+
+class ObjectDetector:
+    """Any model ultralytics can load: .pt, an _ncnn_model folder, .onnx, .tflite."""
+
+    def __init__(self, name):
+        from ultralytics import YOLO
+        try:
+            import torch   # leave one core for the control loop and the camera
+            torch.set_num_threads(max(1, (os.cpu_count() or 4) - 1))
+        except ImportError:
+            pass
+        self.path = model_path(name)
+        self.model = YOLO(self.path, task="detect")
+        # The first inference builds the graph and takes seconds. Pay it now, before
+        # the countdown, not in the opening moments of the match.
+        import numpy as np
+        self.names = self._run(np.zeros((240, 320, 3), np.uint8)).names
+        wanted = TUNE["obj_class"]
+        missing = [w for w in ([wanted] if isinstance(wanted, str) else wanted or [])
+                   if w not in self.names.values()]
+        if missing:
+            # A misspelt class name filters out every detection, and the robot just
+            # spins searching forever with nothing on screen to say why.
+            print("object: model has no class %s - it knows: %s"
+                  % (missing, ", ".join(self.names.values())))
+        print("object: %s, ball = %s" % (self.path, wanted or "ANY class (placeholder)"))
+
+    def _run(self, frame):
+        return self.model.predict(frame, imgsz=TUNE["obj_imgsz"], conf=TUNE["obj_conf"],
+                                  verbose=False)[0]
+
+    def detect(self, frame):
+        """-> (dx in -1..1, radius_px) or None, like find_ball."""
+        r = self._run(frame)
+        boxes = [(*xyxy, conf, r.names[int(k)]) for xyxy, conf, k in
+                 zip(r.boxes.xyxy.tolist(), r.boxes.conf.tolist(), r.boxes.cls.tolist())]
+        return pick_box(boxes, frame.shape[1], TUNE["obj_class"])
+
+
+class AsyncDetector:
+    """Runs the detector on its own thread, so a slow model cannot slow the loop.
+
+    This is not about frame rate. Gyro.heading() caps each step at 0.1 s, so a loop
+    that waited ~270 ms on inference would drop most of every turn from the heading
+    and the robot would lose the goal. The loop hands in its newest frame and reads
+    back the newest answer; the worker only ever runs on the latest frame, never a
+    queue of old ones."""
+
+    def __init__(self, detector):
+        self.detector = detector
+        self.cond = threading.Condition()
+        self.frame, self.frame_t = None, 0.0
+        self.ball, self.ball_t = None, 0.0
+        self.running, self.thread = True, None
+
+    def start(self):
+        import atexit
+        self.thread = threading.Thread(target=self._work, daemon=True)
+        self.thread.start()
+        # A daemon thread caught mid-inference when Python exits aborts the whole
+        # process from inside torch ("terminate called without an active exception").
+        # atexit runs on every way out - match over, --dry, Ctrl-C - so stop it there.
+        atexit.register(self.close)
+        return self
+
+    def close(self):
+        with self.cond:
+            self.running = False
+            self.cond.notify()
+        if self.thread:
+            self.thread.join(2.0)   # one inference at most
+
+    def see(self, frame):
+        """Queue `frame`, return the freshest detection. Drop-in for find_ball."""
+        with self.cond:
+            self.frame, self.frame_t = frame, time.time()
+            self.cond.notify()
+            fresh = time.time() - self.ball_t < TUNE["obj_max_age"]
+            return self.ball if fresh else None
+
+    def _work(self):
+        while True:
+            with self.cond:
+                while self.frame is None and self.running:
+                    self.cond.wait()
+                if not self.running:
+                    return
+                frame, t = self.frame, self.frame_t
+                self.frame = None
+            try:
+                ball = self.detector.detect(frame)
+            except Exception as e:     # one bad frame must not kill the thread for good
+                print("object: detect failed (%s)" % e)
+                ball = None
+            with self.cond:
+                # Timestamped when the frame was CAPTURED, not when inference ended:
+                # the ball has been moving for the whole time the model was thinking.
+                self.ball, self.ball_t = ball, t
+
+
+def ball_finder():
+    """-> (fn(frame) -> ball, label). The detector, or colour if it can't be had."""
+    if not OBJECT:
+        return find_ball, "colour"
+    try:
+        det = ObjectDetector(OBJECT_MODEL or TUNE["obj_model"])
+    except Exception as e:
+        # Loud, but keep playing: a robot chasing by colour beats one that won't start.
+        print("!" * 60)
+        print("object: cannot load model (%s: %s)" % (type(e).__name__, e))
+        print("object: FALLING BACK TO COLOUR TRACKING")
+        print("!" * 60)
+        return find_ball, "colour"
+    return AsyncDetector(det).start().see, "object"
+
+
 # ---------------------------------------------------------------- streaming
 PAGE = b"""<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
 <title>ballbot</title>
@@ -609,7 +773,7 @@ def _stream_handler(streamer):
 
 
 # ---------------------------------------------------------------- main
-def play(bot, grab, goal_heading, t_end, stream=None):
+def play(bot, grab, goal_heading, t_end, stream=None, find=find_ball, label="colour"):
     import numpy as np
     st, stuck_since, prev = {"spin": 1}, time.time(), None
     while time.time() < t_end:
@@ -622,7 +786,7 @@ def play(bot, grab, goal_heading, t_end, stream=None):
         blind = st["blind"] > TUNE["blind_frames"]
         # A dropped frame reads as None. Don't hand that to OpenCV - it throws, and a
         # crash mid-match costs far more than a skipped frame.
-        ball = None if (blind or frame is None) else find_ball(frame)
+        ball = None if (blind or frame is None) else find(frame)
         h = bot.heading()
         herr = None if (h is None or goal_heading is None) else -angle_diff(goal_heading, h)
         vx, vy, w = decide(ball, herr, st, blind)
@@ -632,8 +796,8 @@ def play(bot, grab, goal_heading, t_end, stream=None):
                     max(0.0, t_end - time.time()),
                     "--" if h is None else "%.0f" % h,
                     "--" if herr is None else "%+.0f" % herr),
-                "ball %s   %s" % (
-                    "none" if ball is None else "dx%+.2f r%.0f" % ball,
+                "ball (%s) %s   %s" % (
+                    label, "none" if ball is None else "dx%+.2f r%.0f" % ball,
                     "BLIND" if blind else ""),
                 "vx%+.2f vy%+.2f w%+.2f" % (vx, vy, w),
             ])
@@ -686,6 +850,14 @@ def selftest():
                                   "  BLIND - lens covered?" if is_blind(frame) else ""))
     if frame is not None:
         print("ball        :", find_ball(frame), " (aim the camera at the ball)")
+        if OBJECT:
+            try:
+                det = ObjectDetector(OBJECT_MODEL or TUNE["obj_model"])
+                t = time.time()
+                found = det.detect(frame)
+                print("object      :", found, " (%.0f ms)" % ((time.time() - t) * 1000))
+            except Exception as e:
+                print("object      : FAILED - %s: %s" % (type(e).__name__, e))
     bot.stop()
 
 
@@ -726,6 +898,7 @@ def main():
         return wheeltest()
     bot = Robot()
     grab = open_camera()
+    find, label = ball_finder()   # before the countdown: loading a model takes seconds
     stream = Streamer(STREAM_PORT).start() if STREAM else None
     left = 12 * 60
     try:
@@ -743,7 +916,7 @@ def main():
             goal_heading = bot.heading()
             print("go. %.0f s left, goal heading = %s" % (left, goal_heading))
             t0 = time.time()
-            play(bot, grab, goal_heading, t0 + (5 if DRY else left), stream)
+            play(bot, grab, goal_heading, t0 + (5 if DRY else left), stream, find, label)
             left -= time.time() - t0   # 6.3: a goal stops the clock, it doesn't reset it
             print("stopped, %.0f s left" % max(left, 0))
             if DRY:

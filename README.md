@@ -106,6 +106,38 @@ at 10 fps so the match loop keeps its timing.
 **Turn it off at the venue.** Rule 2.2 bans wifi during a match, which is why it is
 opt-in and why `ballbot.service` does not pass it.
 
+## Finding the ball with a model instead of colour
+
+`python3 bot.py --object` finds the ball with a YOLO detector rather than the HSV
+window. It loads `obj_model` from `tune.json` (default `best.pt`, looked up from where
+you run it and then next to `bot.py`). Name a different model for one run with
+`--object path/to/model`. Whatever it finds is reduced to the same "how far left or
+right, how big" that colour tracking gives, so the strategy doesn't change.
+
+`best.pt` knows two classes, `ball` and `car`, and `obj_class` is `"ball"`, so it
+steers only on the ball. That filter is what stops it chasing a rival robot. If you
+swap in a model with different class names, set `obj_class` in `tune.json` to match.
+At startup it prints the model's class names if the one you set isn't among them.
+`null` chases whatever it detects most confidently; that's only useful for testing a
+model that has no ball class.
+
+Speed on a Pi 4: a `.pt` runs at about 3.5 fps. Export it to NCNN once for roughly
+three times that:
+
+```bash
+yolo export model=best.pt format=ncnn imgsz=320     # writes best_ncnn_model/
+python3 bot.py --object best_ncnn_model
+```
+
+The model runs on its own thread, so a slow one gives the robot old sightings, never
+a slow loop. That matters because the gyro heading only integrates correctly at 10 Hz
+or better. Sightings older than `obj_max_age` (0.8 s) are ignored. If the model won't
+load, bot.py says so in a banner and falls back to colour rather than refusing to
+start. `python3 bot.py --check --object` times one detection on a real frame.
+
+Model files (`*.pt`, `*.onnx`, `*_ncnn_model/`) are gitignored, so copy them onto
+the robot yourself.
+
 ## Tuning the ball colour from a laptop
 
 `python3 calibrate.py` with no screen on the Pi starts the same kind of server at

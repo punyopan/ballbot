@@ -144,8 +144,46 @@ def test_find_ball_ignores_a_same_coloured_rival():
     assert dx > 0.4 and r > 30, "should prefer the nearer/bigger ball: %s" % ((dx, r),)
 
 
+def test_pick_box():
+    """--object mode's box -> (dx, radius), the same shape decide() gets from colour."""
+    from bot import pick_box
+    ball = (140, 100, 180, 140, 0.6, "ball")             # centred at x=160, 40 px wide
+    rival = (0, 0, 120, 120, 0.9, "robot")
+
+    dx, r = pick_box([ball], 320)
+    assert abs(dx) < 1e-6 and r == 20, "centre of a 320-wide frame is dx 0: %s" % ((dx, r),)
+    assert pick_box([], 320) is None
+    assert pick_box([ball, rival], 320, "ball")[0] == 0, "class filter keeps the rival out"
+    assert pick_box([rival], 320, ["ball"]) is None, "a list of classes works too"
+    assert pick_box([ball, rival], 320)[1] == 60, "no filter: most confident box wins"
+    # a ball cut off at the bottom edge: box is short, but still as wide as the ball
+    assert pick_box([(140, 200, 180, 240, 0.8, "ball"), ], 320)[1] == 20
+    assert pick_box([(140, 220, 180, 240, 0.8, "ball")], 320)[1] == 20, "longer side, not shorter"
+
+
+def test_async_detector_goes_stale():
+    """A slow model must not freeze the loop, and an old answer must not steer."""
+    import time as _t
+    from bot import AsyncDetector
+
+    class Slow:
+        def detect(self, frame):
+            _t.sleep(0.05)
+            return (0.5, 10)
+
+    a = AsyncDetector(Slow()).start()
+    t = _t.time()
+    assert a.see("frame") is None, "nothing detected yet"
+    assert _t.time() - t < 0.02, "see() must not wait on the model"
+    _t.sleep(0.15)
+    assert a.see("frame") == (0.5, 10), "picks up the worker's answer"
+    a.ball_t -= TUNE["obj_max_age"] + 1
+    assert a.see("frame") is None, "a detection older than obj_max_age is dropped"
+
+
 for fn in (test_mix, test_angle_diff, test_decide, test_ball_memory, test_blind, test_should_escape, test_gyro,
-           test_find_ball_ignores_a_same_coloured_rival):
+           test_find_ball_ignores_a_same_coloured_rival, test_pick_box,
+           test_async_detector_goes_stale):
     fn()
     print("ok", fn.__name__)
 print("all good")
