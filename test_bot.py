@@ -46,6 +46,19 @@ def test_decide():
     assert st["spin"] == -1, "remembers which way the ball went for the next search"
 
 
+def test_decide_prefers_goal_over_gyro():
+    close = TUNE["close_radius"] + 5
+    # Gyro herr says wildly off (60 deg would normally trigger the "orbit" branch),
+    # but the goal is dead centre in the actual picture - trust the picture.
+    vx, vy, w = decide((0.0, close), 60.0, {}, goal=(0.0, 40))
+    assert vx > 0.5, "goal centred in frame: drive through despite gyro disagreeing"
+
+    # Goal visibly off to the right (dx>0) must turn us right (w<0), regardless of
+    # what the gyro says, and even while not yet close enough to line up and charge.
+    vx, vy, w = decide((0.0, close), 0.0, {}, goal=(0.5, 40))
+    assert w < 0, "goal right of centre: turn right to face it"
+
+
 def test_ball_memory():
     close, far = TUNE["close_radius"] + 5, TUNE["close_radius"] - 15
 
@@ -181,9 +194,35 @@ def test_async_detector_goes_stale():
     assert a.see("frame") is None, "a detection older than obj_max_age is dropped"
 
 
-for fn in (test_mix, test_angle_diff, test_decide, test_ball_memory, test_blind, test_should_escape, test_gyro,
+def test_find_goal():
+    import numpy as np
+    from bot import find_goal
+
+    def frame_with_wall(gap=None, wall_rows=(60, 120)):
+        f = np.full((240, 320, 3), 200, np.uint8)          # bright floor
+        f[wall_rows[0]:wall_rows[1], :] = 15                # black wall band, full width
+        if gap:
+            gs, ge = gap
+            f[wall_rows[0]:wall_rows[1], gs:ge] = 200        # cut the goal opening in it
+        return f
+
+    dx, gap = find_goal(frame_with_wall(gap=(140, 180)))
+    assert abs(dx) < 0.05 and 30 < gap < 50, "centred 40px gap: %s" % ((dx, gap),)
+
+    dx, _gap = find_goal(frame_with_wall(gap=(40, 90)))
+    assert dx < -0.5, "gap on the left reads dx < 0: %.2f" % dx
+
+    assert find_goal(frame_with_wall(gap=None)) is None, "solid wall: no goal in view"
+    assert find_goal(frame_with_wall(gap=(0, 60))) is None, \
+        "gap touching the picture edge is not trusted - could just be the wall running out"
+    assert find_goal(frame_with_wall(gap=(150, 157))) is None, \
+        "too narrow to be the goal - treated as noise, same as min_area for the ball"
+
+
+for fn in (test_mix, test_angle_diff, test_decide, test_decide_prefers_goal_over_gyro, test_ball_memory,
+           test_blind, test_should_escape, test_gyro,
            test_find_ball_ignores_a_same_coloured_rival, test_pick_box,
-           test_async_detector_goes_stale):
+           test_async_detector_goes_stale, test_find_goal):
     fn()
     print("ok", fn.__name__)
 print("all good")

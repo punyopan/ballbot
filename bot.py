@@ -94,11 +94,16 @@ DEFAULTS = {
     "motion_min": 2.5,       # frame-to-frame pixel change below this = we aren't moving
     "stuck_secs": 2.5,       # how long that has to hold before we thrash free
     # --- the black field frame: walls, goal posts, crossbar. Tuned with
-    # calibrate_frame.py. Nothing steers on it yet - it is the mask a goal detector
-    # gets built on, since the goal is the one place the frame has an opening. Black
-    # is the dark end of the scale and its hue and saturation are mostly sensor noise,
-    # so V hi is the number that matters.
+    # calibrate_frame.py. Black is the dark end of the scale and its hue and
+    # saturation are mostly sensor noise, so V hi is the number that matters.
     "frame_lo": [0, 0, 0], "frame_hi": [179, 255, 70],
+    # --- goal detection: the opening in the black frame. find_goal() only trusts a
+    # gap it can see BOTH edges of, so it never mistakes "wall ran off the edge of
+    # the picture" for an open goal.
+    "goal_wall_frac": 0.3,   # a row counts as "wall" once this fraction of it is black
+    "goal_min_gap": 10,      # px wide (at 320 wide), ignore anything narrower as noise
+    "goal_gain": 1.3,        # like turn_gain but keyed off screen fraction, not degrees
+    "shoot_dx": 0.12,        # goal off-centre by less than this reads as "aimed"
     # --- USB webcam controls. These live on the device, not in the program, so they
     # reset on a replug or a reboot unless we set them at every start.
     #
@@ -159,9 +164,13 @@ def should_escape(still, blind, asking_to_move, stalled_for):
     return still and not blind and asking_to_move and stalled_for > TUNE["stuck_secs"]
 
 
-def decide(ball, herr, st, blind=False):
+def decide(ball, herr, st, blind=False, goal=None):
     """ball = (dx in -1..1, radius_px) or None.
-    herr = degrees we must turn counter-clockwise to face the enemy goal (None = no IMU).
+    herr = degrees we must turn counter-clockwise to face the enemy goal, from the
+    gyro (None = no IMU).
+    goal = (dx in -1..1, gap_px) for the goal mouth as find_goal() actually saw it
+    in THIS frame, or None if it is not in view. It is ground truth with none of
+    the gyro's drift, so whenever we can see it, it overrides the compass estimate.
     blind = the camera can't see anything (covered, knocked, or blown out).
     Returns (vx, vy, w).
 
@@ -169,7 +178,10 @@ def decide(ball, herr, st, blind=False):
     in play() is what digs us out of a wall grind."""
     T = TUNE
     st["n"] = st.get("n", 0) + 1
-    aim = 0.0 if herr is None else clamp(herr * T["turn_gain"] / 90.0)
+    aim_gyro = 0.0 if herr is None else clamp(herr * T["turn_gain"] / 90.0)
+    aim = aim_gyro if goal is None else clamp(-goal[0] * T["goal_gain"])
+    aligned = (abs(goal[0]) < T["shoot_dx"]) if goal is not None else (
+        herr is None or abs(herr) < T["shoot_deg"])
     if blind:
         # Can't find the ball, but the compass still knows where the goal is: push
         # that way and sweep, so a dead camera costs us the match instead of the game.
@@ -182,14 +194,17 @@ def decide(ball, herr, st, blind=False):
         if (st.get("seen_r", 0) >= T["close_radius"]
                 and st["n"] - st.get("seen_n", -999) < T["ball_memory"]):
             return (T["speed"], 0.0, aim)
-        return (-0.12, 0.0, st.get("spin", 1) * T["search_spin"])
+        # No ball in view: still searching, but if we know which way the goal is
+        # (compass, or the goal frame itself), bend the search toward it instead of
+        # spinning blind off the last side the ball happened to vanish on.
+        return (-0.12, 0.0, clamp(st.get("spin", 1) * T["search_spin"] + aim))
     dx, r = ball
     st["spin"] = 1 if dx < 0 else -1
     st["seen_n"], st["seen_r"] = st["n"], r
     if r >= T["close_radius"]:
-        if herr is None or abs(herr) < T["shoot_deg"]:
+        if aligned:
             return (T["speed"], -dx * 0.35, aim)                   # lined up: drive through it
-        s = 1.0 if herr > 0 else -1.0
+        s = 1.0 if aim > 0 else -1.0
         return (0.15, -s * T["speed"] * 0.9, aim)                  # orbit around the ball
     return (T["speed"] * (1 - 0.45 * abs(dx)), -dx * T["strafe_gain"], aim * 0.5)
 
@@ -562,6 +577,42 @@ def ball_finder():
     return AsyncDetector(det).start().see, "object"
 
 
+def find_goal(frame):
+    """-> (dx in -1..1, gap_px) for the goal mouth, or None if it is not in view.
+
+    The wall and the goal posts are the same black, so colour alone cannot tell
+    them apart - the goal is the one place that black has a hole in it. Find the
+    row band where the frame is mostly black (wherever the wall sits in THIS
+    frame - near or far, it doesn't matter), then take the widest run of
+    not-black pixels inside that band. Only a run with black frame on BOTH sides
+    of it counts: a gap that runs off an edge of the picture might just be the
+    wall running out of frame (we are close, or off to one side), not an open
+    goal, so that reads as "not seen" rather than risking a bad guess."""
+    import numpy as np
+    mask = frame_mask(frame) > 0
+    h, w = mask.shape
+    wall_rows = np.where(mask.mean(axis=1) > TUNE["goal_wall_frac"])[0]
+    if len(wall_rows) == 0:
+        return None
+    is_black = mask[wall_rows[0]:wall_rows[-1] + 1].mean(axis=0) > 0.5
+    best = None
+    x = 0
+    while x < w:
+        if is_black[x]:
+            x += 1
+            continue
+        start = x
+        while x < w and not is_black[x]:
+            x += 1
+        if start > 0 and x < w and x - start >= TUNE["goal_min_gap"]:
+            if best is None or x - start > best[1] - best[0]:
+                best = (start, x)
+    if best is None:
+        return None
+    start, end = best
+    return ((start + end) / 2.0 / (w / 2.0) - 1.0, end - start)
+
+
 # ---------------------------------------------------------------- streaming
 PAGE = b"""<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
 <title>ballbot</title>
@@ -787,9 +838,10 @@ def play(bot, grab, goal_heading, t_end, stream=None, find=find_ball, label="col
         # A dropped frame reads as None. Don't hand that to OpenCV - it throws, and a
         # crash mid-match costs far more than a skipped frame.
         ball = None if (blind or frame is None) else find(frame)
+        goal = None if (blind or frame is None) else find_goal(frame)
         h = bot.heading()
         herr = None if (h is None or goal_heading is None) else -angle_diff(goal_heading, h)
-        vx, vy, w = decide(ball, herr, st, blind)
+        vx, vy, w = decide(ball, herr, st, blind, goal)
         if stream is not None and stream.wants_frame():
             stream.offer(frame, ball, (vx, vy, w), [
                 "%4.0fs left   heading %s   goal err %s" % (
@@ -799,6 +851,7 @@ def play(bot, grab, goal_heading, t_end, stream=None, find=find_ball, label="col
                 "ball (%s) %s   %s" % (
                     label, "none" if ball is None else "dx%+.2f r%.0f" % ball,
                     "BLIND" if blind else ""),
+                "goal %s" % ("none" if goal is None else "dx%+.2f gap%.0f" % goal),
                 "vx%+.2f vy%+.2f w%+.2f" % (vx, vy, w),
             ])
 
