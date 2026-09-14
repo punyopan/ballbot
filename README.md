@@ -9,7 +9,7 @@ motor driver board, 18650 battery box. Everything below is legal modification.
 |---|---|
 | `bot.py` | the whole robot: vision → strategy → mecanum drive. `--button` to start on a press, `--stream` to watch from a laptop |
 | `calibrate.py` | lock the ball colour on the real field → `tune.json`. Tunes from a laptop browser when the Pi has no screen |
-| `calibrate_frame.py` | the same tuner for the black walls and goal frame → `frame_lo` / `frame_hi` in `tune.json`. Nothing steers on it yet |
+| `calibrate_frame.py` | the same tuner for the black walls and goal frame → `frame_lo` / `frame_hi` in `tune.json`, which `find_goal()` steers on |
 | `test_bot.py` | self-check for the driving maths and the strategy, runs on a laptop |
 | `drive.py` | drive the chassis by hand: forward, strafe, spin; also `--pins` to probe wiring |
 | `checkrun.py` | "why won't it run" — walks the stack and prints a fix for each failure |
@@ -160,9 +160,11 @@ hue and saturation stay wide open, because on black they are mostly sensor noise
 Tune until the frame is solid white in the mask while the white floor, the ball and
 the shadows under robots stay black, then Save.
 
-Nothing drives on this mask yet. The walls and the goal frame are the same black, so
-colour alone cannot tell them apart; the goal is the one place the frame has an
-opening. This mask is the first half of finding it.
+The walls and the goal frame are the same black, so colour alone cannot tell them
+apart; the goal is the one place the frame has an opening. `find_goal()` scans this
+mask for that opening - the widest gap with black on both sides of it - and `decide()`
+steers on it directly whenever it's in view, instead of only trusting the gyro's
+drifting dead-reckoning.
 
 Do these in order. Each one assumes the last passed.
 
@@ -308,3 +310,7 @@ Things that lose matches for reasons that have nothing to do with your code:
 3. Hold the ball where you want the robot to commit and read the printed `r` —
    that number is your `close_radius`.
 4. Motors buzzing but not turning at low power → raise `min_duty`.
+5. `python3 calibrate_frame.py` — click the black wall, goal posts and crossbar until
+   the frame is solid white in the mask, and save. See
+   [Tuning the black frame](#tuning-the-black-frame). Skip this and `find_goal()` never
+   sees an opening, so `decide()` just falls back to the gyro alone.
