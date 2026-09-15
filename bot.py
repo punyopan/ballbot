@@ -149,8 +149,15 @@ def decide(ball, herr, front_cm, st, blind=False, goal=None):
     if r >= T["close_radius"]:
         if aligned:
             return (T["speed"], -dx * 0.35, aim, True)             # lined up: drive through it
+        # Orbit around the ball to face the goal. A small correction, not just the
+        # turn direction: a big turn takes a while, and if the ball drifts toward
+        # the frame edge mid-orbit and drops out of view, decide() falls back to
+        # blind "push straight ahead" - which can shove the ball at exactly the
+        # wrong angle. Nudging the strafe by dx keeps it roughly centred while
+        # the turn plays out, same idea as the far-ball branch below.
         s = 1.0 if aim > 0 else -1.0
-        return (0.15, -s * T["speed"] * 0.9, aim, False)           # orbit around the ball
+        orbit = clamp(-s * 0.9 - dx * 0.4)
+        return (0.15, orbit * T["speed"], aim, False)               # orbit around the ball
     return (T["speed"] * (1 - 0.45 * abs(dx)), -dx * T["strafe_gain"], aim * 0.5, False)
 
 

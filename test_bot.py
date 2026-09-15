@@ -62,6 +62,24 @@ def test_decide_prefers_goal_over_gyro():
     assert w < 0, "goal right of centre: turn right to face it"
 
 
+def test_orbit_corrects_toward_ball_centre():
+    """A big turn takes a while; if the ball drifts off-centre mid-orbit and out of
+    view, decide() falls back to blind 'push straight ahead' at the wrong angle. The
+    orbit's strafe should lean into a centring correction, not just spin blind."""
+    close = TUNE["close_radius"] + 5
+    _vx, base_vy, _w, _kick = decide((0.0, close), 60.0, None, {})     # ball dead centre
+
+    # Ball has drifted the SAME way the orbit already strafes: reinforce it, so the
+    # drift doesn't keep compounding toward the frame edge.
+    _vx, vy_same, _w, _kick = decide((0.2, close), 60.0, None, {})
+    assert vy_same < base_vy, "drifted with the orbit: push harder to recentre"
+
+    # Ball has drifted the OPPOSITE way: ease off, pulling it back toward centre
+    # instead of blindly continuing to strafe it further off-screen.
+    _vx, vy_opp, _w, _kick = decide((-0.2, close), 60.0, None, {})
+    assert vy_opp > base_vy, "drifted against the orbit: ease off to recentre"
+
+
 def test_ball_memory():
     close, far = TUNE["close_radius"] + 5, TUNE["close_radius"] - 15
 
@@ -207,7 +225,8 @@ def test_stream():
     bot._latest = None
 
 
-for fn in (test_mix, test_angle_diff, test_decide, test_decide_prefers_goal_over_gyro, test_ball_memory,
+for fn in (test_mix, test_angle_diff, test_decide, test_decide_prefers_goal_over_gyro,
+           test_orbit_corrects_toward_ball_centre, test_ball_memory,
            test_blind, test_should_escape, test_gyro,
            test_find_ball_ignores_a_same_coloured_rival, test_find_goal, test_stream):
     fn()
